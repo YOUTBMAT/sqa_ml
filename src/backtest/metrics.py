@@ -39,16 +39,49 @@ class PerformanceMetrics:
         # Calmar Ratio
         calmar = (total_return / abs(max_drawdown)) if max_drawdown < 0 else 0.0
 
-        # Win Rate & Profit Factor
-        winning_trades = net_returns[net_returns > 0]
-        losing_trades = net_returns[net_returns < 0]
-        
-        total_trades = len(winning_trades) + len(losing_trades)
-        win_rate = (len(winning_trades) / total_trades) if total_trades > 0 else 0.0
+        # Win Rate & Profit Factor per completed round-trip trade (or fallback to candle returns if no position col)
+        if "position" in results_df.columns:
+            positions = results_df["position"].values
+            trade_returns = []
+            current_trade_return = 0.0
+            in_trade = False
 
-        gross_profit = winning_trades.sum()
-        gross_loss = abs(losing_trades.sum())
-        profit_factor = (gross_profit / (gross_loss + 1e-8)) if gross_loss > 0 else np.nan
+            for i in range(1, len(positions)):
+                prev_pos = positions[i - 1]
+                curr_pos = positions[i]
+                ret = net_returns.iloc[i] if hasattr(net_returns, "iloc") else net_returns[i]
+
+                if prev_pos == 0 and curr_pos != 0:
+                    in_trade = True
+                    current_trade_return = ret
+                elif in_trade:
+                    current_trade_return += ret
+                    if curr_pos == 0 or curr_pos != prev_pos:
+                        trade_returns.append(current_trade_return)
+                        in_trade = False
+                        current_trade_return = 0.0
+
+            if in_trade:
+                trade_returns.append(current_trade_return)
+
+            trade_returns = np.array(trade_returns)
+            winning_trades = trade_returns[trade_returns > 0]
+            losing_trades = trade_returns[trade_returns < 0]
+
+            total_trades = len(trade_returns)
+            win_rate = (len(winning_trades) / total_trades) if total_trades > 0 else 0.0
+
+            gross_profit = winning_trades.sum() if len(winning_trades) > 0 else 0.0
+            gross_loss = abs(losing_trades.sum()) if len(losing_trades) > 0 else 0.0
+            profit_factor = (gross_profit / (gross_loss + 1e-8)) if gross_loss > 0 else (999.0 if gross_profit > 0 else 0.0)
+        else:
+            winning_trades = net_returns[net_returns > 0]
+            losing_trades = net_returns[net_returns < 0]
+            total_trades = len(winning_trades) + len(losing_trades)
+            win_rate = (len(winning_trades) / total_trades) if total_trades > 0 else 0.0
+            gross_profit = winning_trades.sum()
+            gross_loss = abs(losing_trades.sum())
+            profit_factor = (gross_profit / (gross_loss + 1e-8)) if gross_loss > 0 else 0.0
 
         # Total Fees Paid
         total_fees = transaction_costs.sum() * initial_capital
@@ -63,6 +96,7 @@ class PerformanceMetrics:
             "calmar_ratio": float(calmar),
             "win_rate_pct": float(win_rate * 100.0),
             "profit_factor": float(profit_factor) if not np.isnan(profit_factor) else 0.0,
+            "total_trades": int(total_trades),
             "total_fees_paid": float(total_fees),
         }
 

@@ -47,7 +47,7 @@ def main() -> None:
 
     exclude_cols = {
         "timestamp", "symbol", "asset_class", "timeframe", "open", "high", "low", "close",
-        "volume", "trades_count", "target_label", "target_return", "barrier_touched", "sample_weight", "primary_signal",
+        "volume", "trades_count", "target_label", "target_return", "barrier_touched", "sample_weight", "primary_signal", "ofi", "t1", "touch_time",
     }
     feature_cols = [col for col in df_dataset.columns if col not in exclude_cols]
 

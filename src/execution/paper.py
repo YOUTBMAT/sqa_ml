@@ -100,14 +100,17 @@ class PaperTrader:
         stop_loss: float | None = None,
         take_profit: float | None = None,
     ) -> dict:
-        """Execute virtual order with slippage, fee deductions, and state persistence."""
+        """Execute virtual order with slippage, fee deductions, and state persistence supporting LONG and SHORT."""
         logger.info(f"[PAPER] Executing {side.upper()} order for {amount} {symbol} at ~{current_price}...")
         
         if amount <= 0 or current_price <= 0:
             raise ValueError("Invalid order amount or price.")
 
+        side_lower = side.lower()
+        is_buy = side_lower in ["buy", "long"]
+
         # Apply slippage
-        if side.lower() in ["buy", "long"]:
+        if is_buy:
             execution_price = current_price * (1.0 + self.slippage_rate)
         else:
             execution_price = current_price * (1.0 - self.slippage_rate)
@@ -115,29 +118,53 @@ class PaperTrader:
         cost = amount * execution_price
         fee = cost * self.fee_rate
 
-        if side.lower() in ["buy", "long"]:
-            total_required = cost + fee
-            if self.balance < total_required:
-                raise ValueError(f"Insufficient paper balance: required {total_required:.2f}, available {self.balance:.2f}")
-            self.balance -= total_required
-            
-            self.positions[symbol] = {
-                "symbol": symbol,
-                "side": "long",
-                "amount": amount,
-                "entry_price": execution_price,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "timestamp": datetime.now(timezone.utc),
-            }
-        else: # sell / short
-            if symbol not in self.positions:
-                raise ValueError(f"No open long position for {symbol} to close/short.")
-            
-            position = self.positions[symbol]
-            pnl = (execution_price - position["entry_price"]) * amount * (1 if position["side"] == "long" else -1)
-            self.balance += cost + pnl - fee
-            del self.positions[symbol]
+        position = self.positions.get(symbol)
+        has_pos = position is not None and position["amount"] > 0
+
+        if not has_pos:
+            # Opening new position
+            if is_buy:
+                # Open LONG
+                total_required = cost + fee
+                if self.balance < total_required:
+                    raise ValueError(f"Insufficient paper balance: required {total_required:.2f}, available {self.balance:.2f}")
+                self.balance -= total_required
+                self.positions[symbol] = {
+                    "symbol": symbol,
+                    "side": "long",
+                    "amount": amount,
+                    "entry_price": execution_price,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "timestamp": datetime.now(timezone.utc),
+                }
+            else:
+                # Open SHORT
+                self.balance += cost - fee
+                self.positions[symbol] = {
+                    "symbol": symbol,
+                    "side": "short",
+                    "amount": amount,
+                    "entry_price": execution_price,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "timestamp": datetime.now(timezone.utc),
+                }
+        else:
+            # Closing existing position
+            pos_side = position["side"]
+            if (pos_side == "long" and not is_buy) or (pos_side == "short" and is_buy):
+                entry_price = position["entry_price"]
+                pos_amount = position["amount"]
+                if pos_side == "long":
+                    pnl = (execution_price - entry_price) * pos_amount
+                    self.balance += (entry_price * pos_amount) + pnl - fee
+                else: # short
+                    pnl = (entry_price - execution_price) * pos_amount
+                    self.balance -= (cost + fee)
+                del self.positions[symbol]
+            else:
+                raise ValueError(f"Conflicting order side {side} for existing {pos_side} position on {symbol}.")
 
         order_record = {
             "symbol": symbol,

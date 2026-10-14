@@ -21,8 +21,8 @@ class PurgedGroupTimeSeriesSplit:
         groups: pd.Series | np.ndarray = None,
         event_times: pd.DataFrame | pd.Series = None,
     ) -> Generator[tuple[np.ndarray, np.ndarray], None, None]:
-        """Generate purged and embargoed train/test indices."""
-        logger.info(f"Generating {self.n_splits} purged & embargoed CV splits (embargo={self.pct_embargo})...")
+        """Generate time-anchored expanding walk-forward train/test indices with purging."""
+        logger.info(f"Generating {self.n_splits} strict time-anchored expanding walk-forward splits (embargo={self.pct_embargo})...")
 
         if isinstance(X, pl.DataFrame):
             X = X.to_pandas()
@@ -47,31 +47,31 @@ class PurgedGroupTimeSeriesSplit:
                 continue
 
             test_start = t0.iloc[test_idx[0]]
-            test_end = t1.iloc[test_idx[-1]]
+            test_idx_start = test_idx[0]
 
-            # 1. Train indices
-            train_idx = np.setdiff1d(indices, test_idx)
+            # 1. Strict time-anchored expanding walk-forward: train must contain ONLY data prior to test start (train_idx < test_idx_start)
+            train_idx = indices[indices < test_idx_start]
+            if len(train_idx) == 0:
+                logger.warning(f"Fold {i+1}: Train index set is empty (test_idx_start={test_idx_start}). Skipping fold.")
+                continue
 
-            # 2. Purging: remove train samples whose lifespan [t0, t1] overlaps test period
-            train_t0 = t0.iloc[train_idx]
+            # 2. Purging: remove training samples whose vertical barrier t1 invades the test window (t1 >= test_start)
             train_t1 = t1.iloc[train_idx]
-
-            overlap_mask = ~((train_t1 < test_start) | (train_t0 > test_end))
-            purge_train_idx = train_idx[overlap_mask]
+            purge_mask = train_t1 >= test_start
+            purge_train_idx = train_idx[purge_mask]
             train_idx = np.setdiff1d(train_idx, purge_train_idx)
 
-            # 3. Embargo: remove train samples immediately following test fold
-            if self.pct_embargo > 0 and len(test_idx) > 0:
+            # 3. Embargo (if pct_embargo > 0)
+            if self.pct_embargo > 0 and len(train_idx) > 0 and len(test_idx) > 0:
                 embargo_val = int(len(X) * self.pct_embargo)
                 test_max_pos = test_idx[-1]
                 embargo_end_pos = min(test_max_pos + embargo_val, len(X))
-                
                 embargo_mask = (train_idx > test_max_pos) & (train_idx <= embargo_end_pos)
                 embargo_train_idx = train_idx[embargo_mask]
                 train_idx = np.setdiff1d(train_idx, embargo_train_idx)
 
             logger.info(
                 f"Fold {i+1}/{self.n_splits}: Test size = {len(test_idx)}, "
-                f"Train size (after purge/embargo) = {len(train_idx)}"
+                f"Train size (after time-anchor/purge/embargo) = {len(train_idx)}"
             )
             yield train_idx, test_idx

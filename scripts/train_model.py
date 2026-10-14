@@ -68,12 +68,60 @@ def main() -> None:
         "target_return",
         "barrier_touched",
         "sample_weight",
+        "ofi",
+        "primary_signal",
+        "t1",
+        "touch_time",
     }
     feature_cols = [col for col in df_dataset.columns if col not in exclude_cols]
 
+    print("\n--- EXACT LIST OF FEATURE COLUMNS USED IN TRAINING ---")
+    for f in feature_cols:
+        print(f"  - {f}")
+    print("-" * 50 + "\n")
+
     logger.info(f"Identified {len(feature_cols)} feature columns for training.")
 
-    # Instantiate and train model
+    # Compute Out-Of-Sample Walk-Forward AUC
+    logger.info("Computing Out-Of-Sample Walk-Forward Cross-Validation AUC...")
+    from src.validation.cross_validation import PurgedGroupTimeSeriesSplit
+    from sklearn.metrics import roc_auc_score
+    import numpy as np
+
+    cv = PurgedGroupTimeSeriesSplit(n_splits=5, pct_embargo=0.01)
+    pdf = df_dataset.to_pandas()
+    oos_probs = np.full((len(df_dataset), 2), [0.5, 0.5])
+    tested_indices = []
+
+    for fold, (train_idx, test_idx) in enumerate(cv.split(pdf)):
+        if len(train_idx) == 0 or len(test_idx) == 0:
+            continue
+
+        train_df = pl.from_pandas(pdf.iloc[train_idx])
+        test_df = pl.from_pandas(pdf.iloc[test_idx])
+
+        fold_trainer = QuantModelTrainer(n_estimators=100, max_depth=5, learning_rate=0.05)
+        fold_trainer.train(train_df, feature_cols=feature_cols, target_col="target_label", weight_col="sample_weight")
+
+        test_probs = fold_trainer.predict_proba(test_df, feature_cols=feature_cols)
+        oos_probs[test_idx] = test_probs
+        tested_indices.extend(test_idx)
+
+    if tested_indices:
+        y_true = pdf["target_label"].iloc[tested_indices].astype(int)
+        y_pred_proba = oos_probs[tested_indices, 1]
+        try:
+            oos_auc = roc_auc_score(y_true, y_pred_proba)
+        except Exception:
+            oos_auc = 0.0
+    else:
+        oos_auc = 0.0
+
+    print(f"\n==================================================")
+    print(f" WALK-FORWARD OUT-OF-SAMPLE (OOS) ROC AUC: {oos_auc:.4f}")
+    print(f"==================================================\n")
+
+    # Instantiate and train final model on full dataset
     trainer = QuantModelTrainer(n_estimators=100, max_depth=5, learning_rate=0.05)
     
     metrics = trainer.train(

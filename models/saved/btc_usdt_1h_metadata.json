@@ -7,21 +7,23 @@
         "frac_diff_close",
         "vol_parkinson",
         "vol_garman_klass",
-        "vwap",
-        "vwap_upper_1",
-        "vwap_lower_1",
-        "vwap_upper_2",
-        "vwap_lower_2",
-        "ofi",
-        "rsi_adaptive",
-        "primary_signal"
+        "vol_parkinson_pct",
+        "vwap_dist",
+        "vwap_upper_1_dist",
+        "vwap_lower_1_dist",
+        "vwap_upper_2_dist",
+        "vwap_lower_2_dist",
+        "adx_14",
+        "ema_200_dist",
+        "hurst_100",
+        "rsi_adaptive"
     ],
     "metrics": {
-        "accuracy": 0.6992878474615208,
-        "log_loss": 0.6109230011609005,
-        "roc_auc": 0.7776645379753606,
-        "train_samples": 8706
+        "accuracy": 0.7571689259645464,
+        "log_loss": 0.5630210254311316,
+        "roc_auc": 0.8394888979119537,
+        "train_samples": 7672
     },
-    "trained_at": "2026-10-14T01:42:12.581410+00:00",
-    "n_samples": 8740
+    "trained_at": "2026-10-14T19:12:23.940697+00:00",
+    "n_samples": 7717
 }

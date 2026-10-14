@@ -74,11 +74,6 @@ class BotRunner:
         """Process a single symbol iteration (Collect -> Feature -> Predict -> Risk -> Execute -> Notify)."""
         logger.info(f"Processing iteration for {symbol}...")
 
-        # 0. Check if position is already open in paper mode to prevent order stacking
-        if self.mode == "PAPER" and engine.paper_trader.has_open_position(symbol):
-            logger.debug(f"Position already open for {symbol}. Skipping new entry.")
-            return
-
         # 1. Data Collection (fetching recent candles)
         now = datetime.now(timezone.utc)
         start_time = now - timedelta(days=5)
@@ -90,7 +85,23 @@ class BotRunner:
             logger.warning(f"No candles retrieved for {symbol}.")
             return
 
-        # Candle Lock: Process only when a new 1h candle is closed
+        # Candle Lock & Filtering forming candle
+        current_hour_ts = now.replace(minute=0, second=0, microsecond=0)
+        df_candles = df_candles.filter(pl.col("timestamp") < current_hour_ts)
+        if df_candles.is_empty():
+            logger.warning(f"No closed candles available for {symbol} after candle lock filter.")
+            return
+
+        latest_price = float(df_candles["close"][-1])
+
+        # 0. Update positions for SL/TP check in paper mode
+        if self.mode == "PAPER":
+            engine.paper_trader.update_positions({symbol: latest_price})
+            if engine.paper_trader.has_open_position(symbol):
+                logger.debug(f"Position already open for {symbol}. Skipping new entry.")
+                return
+
+        # Check if new 1h candle closed
         latest_candle_ts = df_candles["timestamp"][-1]
         if symbol in self.last_processed_candle_ts and latest_candle_ts <= self.last_processed_candle_ts[symbol]:
             logger.debug(f"No new 1h candle closed for {symbol} (Latest: {latest_candle_ts}). Skipping iteration.")

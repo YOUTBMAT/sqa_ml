@@ -52,37 +52,36 @@ class QuantitativeFeatures:
     def dynamic_vwap_bands(
         df: pl.DataFrame, window: int = 20, num_std: float = 2.0
     ) -> pl.DataFrame:
-        """Calculate Rolling VWAP and Dynamic Bands (±1σ, ±2σ).
-
-        Typical Price = (High + Low + Close) / 3
-        VWAP = sum(Typical Price * Volume) / sum(Volume) over window
-        Bands = VWAP ± num_std * rolling_std(Typical Price)
-        """
-        logger.info(f"Calculating Dynamic VWAP and Bands with window={window}, num_std={num_std}...")
+        """Calculate Rolling VWAP and Dynamic Bands percentage distances relative to VWAP."""
+        logger.info(f"Calculating Dynamic VWAP distance bands with window={window}, num_std={num_std}...")
         
         high = pl.col("high").cast(pl.Float64)
         low = pl.col("low").cast(pl.Float64)
         close = pl.col("close").cast(pl.Float64)
         volume = pl.col("volume").cast(pl.Float64)
 
-        # Typical Price
         tp = (high + low + close) / 3.0
         tp_vol = tp * volume
 
-        # Rolling sums
         sum_tp_vol = tp_vol.rolling_sum(window_size=window)
         sum_vol = volume.rolling_sum(window_size=window)
 
         vwap = sum_tp_vol / (sum_vol + 1e-8)
         tp_std = tp.rolling_std(window_size=window)
 
+        vwap_val = vwap.fill_null(close)
+        vwap_upper_1 = vwap_val + (1.0 * tp_std)
+        vwap_lower_1 = vwap_val - (1.0 * tp_std)
+        vwap_upper_2 = vwap_val + (num_std * tp_std)
+        vwap_lower_2 = vwap_val - (num_std * tp_std)
+
         return df.with_columns(
             [
-                vwap.fill_null(close).alias("vwap"),
-                (vwap + (1.0 * tp_std)).fill_null(close).alias("vwap_upper_1"),
-                (vwap - (1.0 * tp_std)).fill_null(close).alias("vwap_lower_1"),
-                (vwap + (num_std * tp_std)).fill_null(close).alias("vwap_upper_2"),
-                (vwap - (num_std * tp_std)).fill_null(close).alias("vwap_lower_2"),
+                ((close - vwap_val) / (vwap_val + 1e-8)).fill_null(0.0).alias("vwap_dist"),
+                ((close - vwap_upper_1) / (vwap_val + 1e-8)).fill_null(0.0).alias("vwap_upper_1_dist"),
+                ((close - vwap_lower_1) / (vwap_val + 1e-8)).fill_null(0.0).alias("vwap_lower_1_dist"),
+                ((close - vwap_upper_2) / (vwap_val + 1e-8)).fill_null(0.0).alias("vwap_upper_2_dist"),
+                ((close - vwap_lower_2) / (vwap_val + 1e-8)).fill_null(0.0).alias("vwap_lower_2_dist"),
             ]
         )
 
@@ -135,11 +134,12 @@ class QuantitativeFeatures:
         return df.with_columns(adx_val.alias(output_col)).fill_null(20.0)
 
     @staticmethod
-    def ema(df: pl.DataFrame, span: int = 200, price_col: str = "close", output_col: str = "ema_200") -> pl.DataFrame:
-        """Calculate Exponential Moving Average (EMA)."""
-        logger.info(f"Calculating EMA with span={span}...")
+    def ema_distance(df: pl.DataFrame, span: int = 200, price_col: str = "close", output_col: str = "ema_200_dist") -> pl.DataFrame:
+        """Calculate percentage distance from Exponential Moving Average (EMA)."""
+        logger.info(f"Calculating EMA distance with span={span}...")
         close = pl.col(price_col).cast(pl.Float64)
-        return df.with_columns(close.ewm_mean(span=span).alias(output_col)).fill_null(close)
+        ema = close.ewm_mean(span=span).fill_null(close)
+        return df.with_columns(((close - ema) / (close + 1e-8)).fill_null(0.0).alias(output_col))
 
     @staticmethod
     def hurst_exponent(df: pl.DataFrame, window: int = 100, price_col: str = "close", output_col: str = "hurst_100") -> pl.DataFrame:

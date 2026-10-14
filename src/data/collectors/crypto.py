@@ -12,7 +12,7 @@ from src.utils.logger import logger
 class CryptoCollector(BaseCollector):
     """Collector for cryptocurrency markets utilizing CCXT Async."""
 
-    def __init__(self, exchange_id: str = "binance", sandbox: bool = False) -> None:
+    def __init__(self, exchange_id: str = "binance", sandbox: bool = False, default_type: str = "spot") -> None:
         self.exchange_id = exchange_id
         self.sandbox = sandbox
         exchange_class = getattr(ccxt_async, exchange_id)
@@ -23,7 +23,7 @@ class CryptoCollector(BaseCollector):
                 "headers": {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 },
-                "options": {"defaultType": "future"},  # Default to derivatives for funding/OI
+                "options": {"defaultType": default_type},
             }
         )
         if sandbox and self.exchange.has.get("sandboxMode"):

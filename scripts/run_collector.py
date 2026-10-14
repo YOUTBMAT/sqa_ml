@@ -47,6 +47,13 @@ async def main() -> None:
         default=30,
         help="Number of historical days to fetch if no prior data exists",
     )
+    parser.add_argument(
+        "--market-type",
+        type=str,
+        choices=["spot", "future"],
+        default="spot",
+        help="Market type: spot or future",
+    )
 
     args = parser.parse_args()
 
@@ -65,7 +72,7 @@ async def main() -> None:
     total_inserted = 0
 
     if args.asset_class == "CRYPTO":
-        async with CryptoCollector(exchange_id=args.exchange) as collector:
+        async with CryptoCollector(exchange_id=args.exchange, default_type=args.market_type) as collector:
             pipeline = ETLPipeline(collector, asset_class="CRYPTO")
             for symbol in args.symbols:
                 try:

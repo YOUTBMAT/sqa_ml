@@ -206,6 +206,7 @@ class TripleBarrierLabeler:
         pdf["target_label"] = labels_pdf["target_label"]
         pdf["target_return"] = labels_pdf["target_return"]
         pdf["barrier_touched"] = labels_pdf["barrier_touched"]
+        pdf["t1"] = labels_pdf["t1"]
 
         pdf = pdf.reset_index()
         result_df = pl.from_pandas(pdf)

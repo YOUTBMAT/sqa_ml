@@ -60,9 +60,9 @@ class FeaturePipeline:
         # 4. Technical: Dynamic VWAP & Bands
         df = QuantitativeFeatures.dynamic_vwap_bands(df, window=self.rolling_window, num_std=2.0)
 
-        # 5. Technical: ADX 14, EMA 200, Hurst 100
+        # 5. Technical: ADX 14, EMA 200 Distance, Hurst 100
         df = QuantitativeFeatures.adx(df, period=14, output_col="adx_14")
-        df = QuantitativeFeatures.ema(df, span=200, price_col="close", output_col="ema_200")
+        df = QuantitativeFeatures.ema_distance(df, span=200, price_col="close", output_col="ema_200_dist")
         df = QuantitativeFeatures.hurst_exponent(df, window=100, price_col="close", output_col="hurst_100")
 
         # 6. Technical: Adaptive RSI
@@ -81,9 +81,13 @@ class FeaturePipeline:
             "vol_parkinson",
             "vol_garman_klass",
             "vol_parkinson_pct",
-            "vwap",
+            "vwap_dist",
+            "vwap_upper_1_dist",
+            "vwap_lower_1_dist",
+            "vwap_upper_2_dist",
+            "vwap_lower_2_dist",
             "adx_14",
-            "ema_200",
+            "ema_200_dist",
             "hurst_100",
             "rsi_adaptive",
         ]
