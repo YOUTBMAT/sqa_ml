@@ -1,0 +1,15 @@
+[Unit]
+Description=SQA-ML Trading Bot Service (Paper Mode)
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/youtbmat/Documentos/Coding Projects/sqa_ml
+Environment=PYTHONPATH=src:config:.
+EnvironmentFile=/home/youtbmat/Documentos/Coding Projects/sqa_ml/config/.env
+ExecStart="/home/youtbmat/Documentos/Coding Projects/sqa_ml/venv/bin/python" scripts/run_live_bot.py --symbols BTC/USDT ETH/USDT SOL/USDT --timeframe 1h --mode PAPER --poll-interval 60
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

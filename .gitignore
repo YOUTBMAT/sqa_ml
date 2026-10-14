@@ -1,0 +1,31 @@
+# Ambientes Virtuais & Cache Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Segredos & Variáveis de Ambiente (CRÍTICO)
+.env
+*.env
+config/.env
+*.pem
+*.key
+
+# Dados e Histórico do Paper Trading (Estado de Conta)
+data/paper/paper_portfolio.json
+data/raw/
+data/datasets/*.parquet
+data/backtest_results/*.parquet
+
+# Modelos Binários e Cache de Artefatos
+models/saved/*.joblib
+models/saved/*.pkl
+
+# Logs e Arquivos de Sistema
+*.log
+logs/
+.idea/
+.vscode/
+.DS_Store
