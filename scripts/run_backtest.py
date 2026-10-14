@@ -50,6 +50,19 @@ def main() -> None:
         "volume", "trades_count", "target_label", "target_return", "barrier_touched", "sample_weight", "primary_signal", "ofi", "t1", "touch_time",
     }
     feature_cols = [col for col in df_dataset.columns if col not in exclude_cols]
+    top10_features = [
+        "vol_parkinson_pct",
+        "ema_200_dist",
+        "frac_diff_close",
+        "hurst_100",
+        "vol_garman_klass",
+        "vol_ratio_6_24",
+        "vol_parkinson",
+        "rsi_adaptive",
+        "vwap_lower_2_dist",
+        "adx_14",
+    ]
+    feature_cols = [col for col in feature_cols if col in top10_features]
 
     # 1. Compute Primary Signal (EMA200 & ADX14)
     pdf_dataset = df_dataset.to_pandas()

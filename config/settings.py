@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
+    # Production Trading Configuration
+    SYMBOLS: list[str] = ["BTC/USDT", "ETH/USDT"]
+    PROB_THRESHOLD: float = 0.65
+    PT_SL_RATIO: list[float] = [1.5, 1.0]
+
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(__file__), ".env"),
         env_file_encoding="utf-8",

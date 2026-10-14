@@ -2,28 +2,23 @@
     "symbol": "BTC/USDT",
     "timeframe": "1h",
     "feature_cols": [
-        "log_return",
-        "rolling_z_close",
         "frac_diff_close",
         "vol_parkinson",
         "vol_garman_klass",
         "vol_parkinson_pct",
-        "vwap_dist",
-        "vwap_upper_1_dist",
-        "vwap_lower_1_dist",
-        "vwap_upper_2_dist",
         "vwap_lower_2_dist",
         "adx_14",
         "ema_200_dist",
         "hurst_100",
-        "rsi_adaptive"
+        "rsi_adaptive",
+        "vol_ratio_6_24"
     ],
     "metrics": {
-        "accuracy": 0.7571689259645464,
-        "log_loss": 0.5630210254311316,
-        "roc_auc": 0.8394888979119537,
-        "train_samples": 7672
+        "accuracy": 0.727719298245614,
+        "log_loss": 0.5684291272466132,
+        "roc_auc": 0.809888442994245,
+        "train_samples": 1425
     },
-    "trained_at": "2026-10-14T19:12:23.940697+00:00",
-    "n_samples": 7717
+    "trained_at": "2026-10-14T21:53:43.604219+00:00",
+    "n_samples": 1438
 }

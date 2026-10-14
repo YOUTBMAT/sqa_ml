@@ -36,19 +36,32 @@ class TripleBarrierLabeler:
 
     @staticmethod
     def get_primary_signal(df: pd.DataFrame) -> pd.Series:
-        """Compute primary signal based on EMA200 and ADX14 regime filters.
+        """Compute primary signal based on Volatility Squeeze & Breakout.
 
-        LONG (+1): close > ema_200 and adx_14 > 20
-        SHORT (-1): close < ema_200 and adx_14 > 20
-        NEUTRAL (0): adx_14 <= 20
+        Squeeze: vol_ratio_6_24 < 0.75
+        LONG (+1): squeeze & vwap_upper_1_dist > 0
+        SHORT (-1): squeeze & vwap_lower_1_dist < 0
+        NEUTRAL (0): otherwise
         """
         close = df["close"]
-        ema = df["ema_200"] if "ema_200" in df.columns else close.ewm(span=200).mean()
-        adx = df["adx_14"] if "adx_14" in df.columns else pd.Series(25, index=df.index)
+        vol_ratio = df["vol_ratio_6_24"] if "vol_ratio_6_24" in df.columns else pd.Series(0.5, index=df.index)
+        
+        if "vwap_upper_1_dist" in df.columns:
+            long_breakout = df["vwap_upper_1_dist"] > 0
+            short_breakout = df["vwap_lower_1_dist"] < 0
+        else:
+            vwap = df["vwap"] if "vwap" in df.columns else close
+            std = close.rolling(20).std().fillna(1.0)
+            up = vwap + std
+            low = vwap - std
+            long_breakout = close > up
+            short_breakout = close < low
+
+        vol_squeeze = vol_ratio < 0.75
 
         signal = np.zeros(len(df), dtype=int)
-        long_mask = (close > ema) & (adx > 20)
-        short_mask = (close < ema) & (adx > 20)
+        long_mask = vol_squeeze & long_breakout
+        short_mask = vol_squeeze & short_breakout
 
         signal[long_mask] = 1
         signal[short_mask] = -1
@@ -173,7 +186,7 @@ class TripleBarrierLabeler:
 
     @classmethod
     def get_labels(
-        cls, df: pl.DataFrame, pt_sl: list[float] = [2.0, 1.0], num_bars: int = 24
+        cls, df: pl.DataFrame, pt_sl: list[float] = [1.5, 1.0], num_bars: int = 24
     ) -> pl.DataFrame:
         """Main interface to compute Meta-Labels for a Polars feature DataFrame."""
         logger.info("Starting Meta-Labeling pipeline...")

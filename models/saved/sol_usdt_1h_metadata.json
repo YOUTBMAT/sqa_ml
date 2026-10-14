@@ -2,26 +2,23 @@
     "symbol": "SOL/USDT",
     "timeframe": "1h",
     "feature_cols": [
-        "log_return",
-        "rolling_z_close",
         "frac_diff_close",
         "vol_parkinson",
         "vol_garman_klass",
-        "vwap",
-        "vwap_upper_1",
-        "vwap_lower_1",
-        "vwap_upper_2",
-        "vwap_lower_2",
-        "ofi",
+        "vol_parkinson_pct",
+        "vwap_lower_2_dist",
+        "adx_14",
+        "ema_200_dist",
+        "hurst_100",
         "rsi_adaptive",
-        "primary_signal"
+        "vol_ratio_6_24"
     ],
     "metrics": {
-        "accuracy": 0.6992878474615208,
-        "log_loss": 0.6109230011609005,
-        "roc_auc": 0.7776645379753606,
-        "train_samples": 8706
+        "accuracy": 0.7609649122807017,
+        "log_loss": 0.5487749762157063,
+        "roc_auc": 0.8254792626728111,
+        "train_samples": 1368
     },
-    "trained_at": "2026-10-14T11:12:23.629258+00:00",
-    "n_samples": 8740
+    "trained_at": "2026-10-14T22:04:03.345101+00:00",
+    "n_samples": 1369
 }

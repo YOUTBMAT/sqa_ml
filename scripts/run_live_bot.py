@@ -36,6 +36,12 @@ def main() -> None:
         default=60,
         help="Polling interval in seconds between iterations",
     )
+    parser.add_argument(
+        "--buy-threshold",
+        type=float,
+        default=0.65,
+        help="Probability threshold for Long/Short entries",
+    )
 
     args = parser.parse_args()
 
@@ -46,6 +52,8 @@ def main() -> None:
         timeframe=args.timeframe,
         mode=args.mode,
         poll_interval_seconds=args.poll_interval,
+        buy_threshold=args.buy_threshold,
+        sell_threshold=1.0 - args.buy_threshold,
     )
 
     try:

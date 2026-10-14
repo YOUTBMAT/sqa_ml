@@ -24,7 +24,7 @@ class DatasetBuilder:
         return self.datasets_dir / filename
 
     def build_dataset(
-        self, symbol: str, timeframe: str, pt_sl: list[float] = [2.0, 1.0], num_bars: int = 24
+        self, symbol: str, timeframe: str, pt_sl: list[float] = [1.5, 1.0], num_bars: int = 24
     ) -> pl.DataFrame:
         """Build supervised ML dataset for a given symbol and timeframe.
 

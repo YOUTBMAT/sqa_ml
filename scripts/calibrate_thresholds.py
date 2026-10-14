@@ -39,9 +39,22 @@ def main() -> None:
 
     exclude_cols = {
         "timestamp", "symbol", "asset_class", "timeframe", "open", "high", "low", "close",
-        "volume", "trades_count", "target_label", "target_return", "barrier_touched", "sample_weight", "primary_signal",
+        "volume", "trades_count", "target_label", "target_return", "barrier_touched", "sample_weight", "primary_signal", "ofi", "t1", "touch_time",
     }
     feature_cols = [col for col in df_dataset.columns if col not in exclude_cols]
+    top10_features = [
+        "vol_parkinson_pct",
+        "ema_200_dist",
+        "frac_diff_close",
+        "hurst_100",
+        "vol_garman_klass",
+        "vol_ratio_6_24",
+        "vol_parkinson",
+        "rsi_adaptive",
+        "vwap_lower_2_dist",
+        "adx_14",
+    ]
+    feature_cols = [col for col in feature_cols if col in top10_features]
 
     # 1. Compute Primary Signal
     pdf_dataset = df_dataset.to_pandas()
@@ -53,18 +66,18 @@ def main() -> None:
     oos_probs = trainer.cross_val_predict_walk_forward(df_dataset, feature_cols=feature_cols, n_splits=5, pct_embargo=0.01)
     p_y1 = oos_probs[:, 1]
 
-    # 3. Grid Search over candidate thresholds
-    thresholds = [0.60, 0.65, 0.70, 0.72, 0.75]
+    # 3. Grid Search over candidate thresholds from 0.50 to 0.65
+    thresholds = [0.50, 0.52, 0.54, 0.56, 0.58, 0.60, 0.62, 0.65]
     results = []
 
     print("\n" + "=" * 90)
     print(f"       SQA-ML THRESHOLD CALIBRATION GRID SEARCH ({args.symbol} | {args.timeframe})       ")
     print("=" * 90)
-    header = f"{'Threshold':<12} | {'Return (%)':<12} | {'Sharpe':<10} | {'Profit Factor':<15} | {'Win Rate (%)':<12} | {'Max DD (%)':<12} | {'Fees ($)':<10}"
+    header = f"{'Threshold':<10} | {'Trades':<8} | {'Win Rate (%)':<12} | {'Profit Factor':<14} | {'Sharpe':<10} | {'Return (%)':<12}"
     print(header)
     print("-" * 90)
 
-    best_threshold = 0.65
+    best_threshold = 0.60
     best_score = -999.0
 
     for th in thresholds:
@@ -95,14 +108,12 @@ def main() -> None:
         sharpe = metrics["sharpe_ratio"]
         pf = metrics["profit_factor"]
         wr = metrics["win_rate_pct"]
-        mdd = metrics["max_drawdown_pct"]
-        fees = metrics["total_fees_paid"]
+        trades = metrics.get("total_trades", 0)
 
-        print(f"{th:<12.2f} | {ret:>11.2f}% | {sharpe:>9.4f} | {pf:>14.4f} | {wr:>11.2f}% | {mdd:>11.2f}% | {fees:>9.2f}")
+        print(f"{th:<10.2f} | {trades:<8} | {wr:>11.2f}% | {pf:>13.4f} | {sharpe:>9.4f} | {ret:>11.2f}%")
 
         results.append({"threshold": th, "metrics": metrics})
 
-        # Scoring function: weighted combination of Sharpe and Profit Factor targeting Phase 2 criteria
         score = sharpe * 0.5 + min(pf, 3.0) * 0.5
         if score > best_score and pf >= 1.0:
             best_score = score
@@ -110,7 +121,7 @@ def main() -> None:
 
     print("=" * 90)
     logger.success(f"Optimal threshold selected: {best_threshold} (Score: {best_score:.4f})")
-    print(f"\n👉 Recommended threshold to fulfill Phase 2 Acceptance Criteria: {best_threshold}\n")
+    print(f"\n👉 Recommended threshold: {best_threshold}\n")
 
 
 if __name__ == "__main__":

@@ -68,11 +68,14 @@ class FeaturePipeline:
         # 6. Technical: Adaptive RSI
         df = QuantitativeFeatures.adaptive_rsi(df, base_period=14, vol_window=self.rolling_window, output_col="rsi_adaptive")
 
+        # 7. Technical: Stationary Alpha Features
+        df = QuantitativeFeatures.stationary_alpha_features(df)
+
         # Log null counts per column before drop_nulls
         null_counts = {col: df[col].null_count() for col in df.columns}
         logger.info(f"Null counts per column before drop_nulls: {null_counts}")
 
-        # 7. Drop warmup rows using core feature subset
+        # 8. Drop warmup rows using core feature subset
         feature_subset = [
             "close",
             "log_return",
@@ -90,6 +93,9 @@ class FeaturePipeline:
             "ema_200_dist",
             "hurst_100",
             "rsi_adaptive",
+            "vol_ratio_6_24",
+            "volume_momentum_24",
+            "volume_price_trend",
         ]
         valid_subset = [col for col in feature_subset if col in df.columns]
 

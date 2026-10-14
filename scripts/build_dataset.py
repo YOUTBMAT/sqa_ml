@@ -27,8 +27,8 @@ def main() -> None:
         "--pt-sl",
         nargs=2,
         type=float,
-        default=[2.0, 1.0],
-        help="Profit Taking and Stop Loss multipliers (e.g., 2.0 1.0)",
+        default=[1.5, 1.0],
+        help="Profit Taking and Stop Loss multipliers (e.g., 1.5 1.0)",
     )
     parser.add_argument(
         "--num-bars",

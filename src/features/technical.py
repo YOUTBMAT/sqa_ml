@@ -161,3 +161,28 @@ class QuantitativeFeatures:
         rmax = vol.rolling_max(window_size=window)
         pct = (vol - rmin) / (rmax - rmin + 1e-8)
         return df.with_columns(pct.clip(0.0, 1.0).alias(output_col)).fill_null(0.5)
+
+    @staticmethod
+    def stationary_alpha_features(df: pl.DataFrame) -> pl.DataFrame:
+        """Calculate stationary alpha features: vol_ratio_6_24, volume_momentum_24, volume_price_trend."""
+        logger.info("Calculating stationary alpha features (vol_ratio_6_24, volume_momentum_24, volume_price_trend)...")
+        close = pl.col("close").cast(pl.Float64)
+        volume = pl.col("volume").cast(pl.Float64)
+
+        log_ret = (close / close.shift(1)).log().fill_null(0.0)
+        vol_6h = log_ret.rolling_std(window_size=6).fill_null(0.0)
+        vol_24h = log_ret.rolling_std(window_size=24).fill_null(0.0)
+        vol_ratio = vol_6h / (vol_24h + 1e-8)
+
+        vol_sma24 = volume.rolling_mean(window_size=24).fill_null(volume)
+        vol_mom = (volume - vol_sma24) / (vol_sma24 + 1e-8)
+
+        vpt = log_ret * vol_mom
+
+        return df.with_columns(
+            [
+                vol_ratio.fill_null(1.0).alias("vol_ratio_6_24"),
+                vol_mom.fill_null(0.0).alias("volume_momentum_24"),
+                vpt.fill_null(0.0).alias("volume_price_trend"),
+            ]
+        )

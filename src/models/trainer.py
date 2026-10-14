@@ -14,8 +14,10 @@ class QuantModelTrainer:
     def __init__(
         self,
         n_estimators: int = 100,
-        max_depth: int = 5,
-        learning_rate: float = 0.05,
+        max_depth: int = 3,
+        num_leaves: int = 7,
+        min_child_samples: int = 50,
+        learning_rate: float = 0.03,
         subsample: float = 0.8,
         colsample_bytree: float = 0.8,
         random_state: int = 42,
@@ -23,6 +25,8 @@ class QuantModelTrainer:
         self.model = LGBMClassifier(
             n_estimators=n_estimators,
             max_depth=max_depth,
+            num_leaves=num_leaves,
+            min_child_samples=min_child_samples,
             learning_rate=learning_rate,
             subsample=subsample,
             colsample_bytree=colsample_bytree,
