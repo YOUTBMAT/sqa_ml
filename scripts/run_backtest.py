@@ -44,7 +44,6 @@ def main() -> None:
         feature_cols = [col for col in settings.MODEL_FEATURES if col in df_dataset.columns]
         p_y1 = QuantModelTrainer().cross_val_predict_walk_forward(df_dataset, feature_cols=feature_cols)[:, 1]
         first_scored = pd.to_datetime(df_dataset["timestamp"].to_pandas())[~np.isnan(p_y1)].min()
-        bars = bars.filter((pd.to_datetime(bars["timestamp"].to_pandas()) >= first_scored).to_numpy())
     else:
         logger.warning("STANDARD mode scores the saved model on data it was trained on: results are in-sample and optimistic.")
         model, meta = ModelStorage().load_model(args.symbol, args.timeframe)
@@ -54,9 +53,10 @@ def main() -> None:
     trades = VectorizedBacktester(
         initial_capital=args.initial_capital, fee_rate=args.fee_rate, slippage=args.slippage
     ).run(bars, sides)
-    metrics = PerformanceMetrics.calculate_metrics(
-        trades, args.initial_capital, PerformanceMetrics.span_years(bars["timestamp"].to_pandas())
-    )
+    bar_ts = pd.to_datetime(bars["timestamp"].to_pandas())
+    if args.mode == "walk-forward":
+        bar_ts = bar_ts[bar_ts >= first_scored]  # unscored rows never trade, so the period starts at the first scored event
+    metrics = PerformanceMetrics.calculate_metrics(trades, args.initial_capital, PerformanceMetrics.span_years(bar_ts))
 
     print("\n" + "=" * 55)
     print(f"  SQA-ML CONTINUOUS HOURLY BACKTEST ({args.mode.upper()})")

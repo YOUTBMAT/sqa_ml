@@ -20,10 +20,10 @@ from src.utils.logger import logger
 THRESHOLDS = [0.50, 0.52, 0.54, 0.56, 0.58, 0.60, 0.62, 0.65]
 
 
-def evaluate(bars, sides: np.ndarray) -> dict:
-    """Run the continuous backtest on a slice of bars and return its metrics."""
-    trades = VectorizedBacktester().run(bars, sides)
-    return PerformanceMetrics.calculate_metrics(trades, 10000.0, PerformanceMetrics.span_years(bars["timestamp"].to_pandas()))
+def evaluate(bars, sides: np.ndarray, window: np.ndarray, bar_ts: pd.Series) -> dict:
+    """Backtest signals inside `window` on the full bar history (so ATR warm-up matches the labels)."""
+    trades = VectorizedBacktester().run(bars, np.where(window, sides, 0.0))
+    return PerformanceMetrics.calculate_metrics(trades, 10000.0, PerformanceMetrics.span_years(bar_ts[window]))
 
 
 def print_row(label: str, m: dict) -> None:
@@ -59,7 +59,6 @@ def main() -> None:
     cutoff = scored_ts.min() + (scored_ts.max() - scored_ts.min()) * (1.0 - args.holdout)
     calib_mask = ((bar_ts >= scored_ts.min()) & (bar_ts < cutoff)).to_numpy()
     hold_mask = (bar_ts >= cutoff).to_numpy()
-    calib_bars, hold_bars = bars.filter(calib_mask), bars.filter(hold_mask)
 
     print("\n" + "=" * 90)
     print(f"  THRESHOLD CALIBRATION ({args.symbol} | {args.timeframe}) | calibration period until {cutoff:%Y-%m-%d}")
@@ -70,7 +69,7 @@ def main() -> None:
     best_threshold, best_score = None, -np.inf
     for th in THRESHOLDS:
         sides = VectorizedBacktester.sides_from_events(bars, df_dataset, p_y1, th)
-        m = evaluate(calib_bars, sides[calib_mask])
+        m = evaluate(bars, sides, calib_mask, bar_ts)
         print_row(f"{th:.2f}", m)
         score = m["sharpe_ratio"] * 0.5 + min(m["profit_factor"], 3.0) * 0.5
         if m["profit_factor"] >= 1.0 and m["total_trades"] >= 20 and score > best_score:
@@ -83,7 +82,7 @@ def main() -> None:
         return
 
     sides = VectorizedBacktester.sides_from_events(bars, df_dataset, p_y1, best_threshold)
-    holdout = evaluate(hold_bars, sides[hold_mask])
+    holdout = evaluate(bars, sides, hold_mask, bar_ts)
     print(f"\nHOLDOUT (from {cutoff:%Y-%m-%d}, never used for selection):")
     print_row(f"{best_threshold:.2f}", holdout)
     if holdout["profit_factor"] < 1.0:
