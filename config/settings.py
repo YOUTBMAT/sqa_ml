@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: str = ""
 
     # Production Trading & Modeling Configuration
-    SYMBOLS: list[str] = ["BTC/USDT", "ETH/USDT"]
-    PROB_THRESHOLD: float = 0.65
+    SYMBOLS: list[str] = ["ETH/USDT"]
+    PROB_THRESHOLD: float = 0.62
     PT_SL_RATIO: list[float] = [1.5, 1.0]
     MAX_HOLD_HOURS: int = 24
     ATR_PERIOD: int = 14

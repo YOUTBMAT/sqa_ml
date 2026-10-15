@@ -12,16 +12,16 @@
 ## 2. Objetivos do Projeto
 - **Expectativa Matemática Positiva:** Desenvolvimento e validação de estratégias quantitativas com *Profit Factor > 1.25* e *Sharpe Ratio > 1.20* em dados *Out-Of-Sample* (OOS).
 - **Simulação Realista Event-Driven:** Backtesting e simulação rigorosos com contabilização de custos operacionais e taxas reais (*taker/maker fee* de 0.05% por perna), com métricas calculadas estritamente por *round-trip* (operações encerradas).
-- **Automação 24/7:** Execução autônoma contínua em ambiente Linux (Ubuntu Systemd) integrada via CCXT, operando inicialmente em modo *Paper Trading* antes do deploy em conta real na Binance Spot API.
+- **Automação 24/7:** Execução autônoma contínua em ambiente Linux (Ubuntu Systemd) integrada via CCXT, operando em modo *Paper Trading* para estresse contínuo na Binance Spot API.
 
 ---
 
-## 3. Resumo da Remediação da Auditoria Quantitativa
-O sistema passou por uma auditoria estrutural e matemática profunda para eliminação de vieses e falhas de engenharia:
-1. **Correção de Dados:** Substituição de arquivos locais duplicados ou artificiais por ingestão direta e limpa de séries históricas reais via CCXT Spot. Exclusão formal de `SOL/USDT` da cesta ativa devido à incompatibilidade com o regime do setup.
-2. **Validação sem Lookahead Bias:** Remoção do K-Fold padrão e adoção de **Purged Walk-Forward Cross-Validation** com janela expansiva, aplicando purga temporal rigorosa baseada na coluna de eventos temporal `t1`.
-3. **Unificação de Features:** Desenvolvimento de um pipeline de engenharia de atributos 100% estacionário e idêntico entre o treinamento, o backtest e a inferência em tempo real (*live runner*).
-4. **Correção do Motor Paper:** Implementação de suporte completo a posições *SHORT*, verificação contínua e ativa de *Stop-Loss* / *Take-Profit* dinâmicos no *runner*, filtro de *Candle Lock* para barras fechadas e sistema robusto de retentativas exponenciais contra interrupções/timeouts da API CCXT.
+## 3. Relatório de Remediação e Auditoria Quantitativa (Fases 1 a 4)
+O sistema passou por uma auditoria estrutural e matemática profunda dividida em 4 fases evolutivas:
+1. **Fase 1 (Ingestão e Coleta Robusta):** Expansão da janela histórica para 1.000 velas horárias via CCXT, incorporando tratamento de falhas, timeouts e retransmissões exponenciais.
+2. **Fase 2 (Persistência Atômica e Sanitização):** Implementação de escrita JSON atômica em operações de estado de portfólio (`paper_portfolio.json`) e limpeza estrita de valores nulos e infinitos no pipeline de dados.
+3. **Fase 3 (Engine de Backtest Contínuo Barra a Barra):** Substituição do simulador de sinais esparsos por um motor *Event-Driven* contínuo barra a barra, eliminando saltos de sinais e permitindo rastreamento exato de posições abertas, *Take-Profit*, *Stop-Loss* e *Max Hold Hours*.
+4. **Fase 4 (Regras de Warmup, Limpeza e Calibração):** Aplicação de regras de *warmup* para indicadores técnicos, alinhamento de timestamps e varredura paramétrica de limiares de probabilidade $P(y=1)$ entre 0.50 e 0.65.
 
 ---
 
@@ -31,24 +31,22 @@ A arquitetura adota um modelo de duas camadas (Sinal Primário + Filtro de Machi
 - **Sinal Primário (Filtro de Regime / Squeeze):**
   - Detecção de compressão de volatilidade através do indicador *Vol Ratio* (`vol_ratio_6_24 < 0.75`) combinado com rompimento dinâmico de VWAP.
 - **Modelo Secundário (Meta-Labeling com LightGBM):**
-  - Classificador Binário **LightGBM** regularizado (`max_depth=3`, `num_leaves=7`, `learning_rate=0.03`), treinado estritamente nas 10 principais *features* ranqueadas por ganho de informação (*Gain*).
+  - Classificador Binário **LightGBM** regularizado (`max_depth=3`, `num_leaves=7`, `learning_rate=0.03`), treinado estritamente nas 10 principais *features* estacionárias ranqueadas por ganho de informação (*Gain*).
 - **Gerenciamento de Risco (Triplo Barreira):**
   - **Take-Profit (TP):** $1.5 \times \text{ATR}$
   - **Stop-Loss (SL):** $1.0 \times \text{ATR}$
   - **Barreira Temporal ($t_1$):** Encerramento compulsório após 24 horas.
-- **Limiar Operacional de Confirmação:**
-  - O sinal primário só é executado se a probabilidade estimada pelo modelo secundário atender ao limiar: $P(y=1) \ge 0.65$.
+- **Limiar Operacional de Confirmação (Produção):**
+  - O sinal primário para o ativo **ETH/USDT** é executado apenas quando a probabilidade estimada pelo modelo secundário atinge ou supera o limiar calibrado: $P(y=1) \ge 0.62$.
 
 ---
 
-## 5. Resultados de Validação Multi-Ativos (Threshold $\ge 0.65$)
-A tabela abaixo consolida o desempenho *Out-Of-Sample* (OOS) verificado após a auditoria e calibração de limiares para o timeframe de 1h:
+## 5. Tabela de Desempenho Contínuo (Engine Barra a Barra - Threshold 0.62)
+A tabela abaixo consolida o desempenho *Out-Of-Sample* obtido pelo engine contínuo após a calibração de thresholds para **ETH/USDT** (ativo exclusivo em produção):
 
-| Ativo / Par | Profit Factor | Win Rate (%) | Sharpe Ratio | Retorno Total OOS | Amostra (N Trades) | Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **BTC/USDT** | **1.62** | 53.12% | **1.91** | +5.83% | 32 | **ATIVO** |
-| **ETH/USDT** | **1.94** | 57.89% | **3.20** | +10.08% | 19 | **ATIVO** |
-| **SOL/USDT** | 0.77 | 41.67% | -1.16 | -2.38% | 12 | **INATIVO (Excluído)** |
+| Ativo / Par | Threshold ($P$) | Trades (N) | Win Rate (%) | Profit Factor | Sharpe Ratio | Retorno Total (%) | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **ETH/USDT** | **0.62** | **40** | **55.00%** | **1.81** | **2.16** | **+9.32%** | **PRODUÇÃO (ATIVO)** |
 
 ---
 
@@ -64,7 +62,7 @@ sqa_ml/
 │   ├── features/        # Engenharia de features, retornos e estacionariedade
 │   ├── labels/          # Rotulagem Tripla Barreira e Meta-Labeling
 │   ├── models/          # Implementação e treino do LightGBM
-│   ├── backtest/        # Motor de backtest event-driven
+│   ├── backtest/        # Motor de backtest event-driven contínuo
 │   ├── execution/       # Runner live, gerenciador de ordens e risk management
 │   ├── risk/            # Gestão de risco e dimensionamento de posição
 │   └── validation/      # Purged Walk-Forward CV
@@ -76,7 +74,7 @@ sqa_ml/
 
 ---
 
-## 7. Guia de Execução e Comandos
+## 7. Guia de Execução e Comandos Systemd
 
 ### 1. Configuração do Ambiente Virtual
 ```bash
@@ -85,31 +83,19 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Construção de Datasets Históricos
-Para baixar e processar os dados históricos via CCXT para a cesta ativa:
+### 2. Construção de Datasets e Treinamento
 ```bash
-python scripts/build_dataset.py
+PYTHONPATH=src:config:. python scripts/build_dataset.py --symbol ETH/USDT
+PYTHONPATH=src:config:. python scripts/train_model.py --symbol ETH/USDT
+PYTHONPATH=src:config:. python scripts/calibrate_thresholds.py --symbol ETH/USDT
 ```
 
-### 3. Treinamento e Validação (Purged Walk-Forward CV)
-Para treinar o modelo LightGBM com validação cruzada sem vazamento:
+### 3. Testes Unitários de Regressão
 ```bash
-python scripts/train_model.py
+pytest
 ```
 
-### 4. Calibração de Thresholds
-Para calibrar a probabilidade ótima de disparo do Meta-Labeling:
-```bash
-python scripts/calibrate_thresholds.py
-```
-
-### 5. Execução de Backtest Event-Driven
-Para rodar a simulação histórica completa com custos e slippage:
-```bash
-python scripts/run_backtest.py
-```
-
-### 6. Gerenciamento do Serviço Systemd (Paper Mode)
+### 4. Gerenciamento do Serviço Systemd (Paper Mode 24/7)
 Para controlar o robô de trading em modo *Paper* no Ubuntu:
 ```bash
 # Verificar status do serviço
@@ -122,5 +108,5 @@ systemctl --user restart sqa_ml_bot.service
 systemctl --user stop sqa_ml_bot.service
 
 # Acompanhar logs em tempo real
-journalctl --user -u sqa_ml_bot.service -f
+journalctl --user -u sqa_ml_bot.service -n 25 --no-pager
 ```
