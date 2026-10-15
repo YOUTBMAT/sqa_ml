@@ -1,50 +1,15 @@
 """Meta-Labeling and Triple Barrier Method labeling module (Marcos López de Prado) unified with ATR and settings."""
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import polars as pl
 from config.settings import settings
+from src.labeling.barriers import atr, simulate_trade
 from src.utils.logger import logger
 
 
 class TripleBarrierLabeler:
     """Implementation of Meta-Labeling and Triple Barrier Method for financial ML."""
-
-    @staticmethod
-    def get_daily_volatility(close: pd.Series, span: int = 100) -> pd.Series:
-        """Compute dynamic volatility using exponentially weighted moving standard deviation of log returns."""
-        logger.info(f"Computing daily volatility with span={span}...")
-        log_rets = np.log(close / close.shift(1))
-        vol = log_rets.ewm(span=span).std()
-        return vol.fillna(vol.mean() if not vol.dropna().empty else 0.01)
-
-    @staticmethod
-    def get_atr_volatility(close: pd.Series, high: pd.Series, low: pd.Series, period: int = settings.ATR_PERIOD) -> pd.Series:
-        """Compute dynamic ATR volatility."""
-        logger.info(f"Computing ATR volatility with period={period}...")
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.ewm(span=period).mean().fillna(close * 0.01)
-        return atr
-
-    @staticmethod
-    def get_vertical_barriers(timestamps: pd.Series, num_bars: int = settings.MAX_HOLD_HOURS) -> pd.Series:
-        """Define vertical time barrier timestamps at a fixed number of bars in the future."""
-        logger.info(f"Defining vertical barriers {num_bars} bars ahead...")
-        t1 = pd.Series(timestamps).shift(-num_bars).values
-        t1_series = pd.Series(t1, index=timestamps)
-        tz = getattr(timestamps, "tz", None)
-        if tz is not None:
-            t1_series = pd.to_datetime(t1_series)
-            if t1_series.dt.tz is None:
-                t1_series = t1_series.dt.tz_localize(tz)
-            else:
-                t1_series = t1_series.dt.tz_convert(tz)
-        else:
-            t1_series = pd.to_datetime(t1_series)
-        return t1_series
 
     @staticmethod
     def get_primary_signal(df: pd.DataFrame) -> pd.Series:
@@ -57,191 +22,68 @@ class TripleBarrierLabeler:
         """
         close = df["close"]
         vol_ratio = df["vol_ratio_6_24"] if "vol_ratio_6_24" in df.columns else pd.Series(0.5, index=df.index)
-        
+
         if "vwap_upper_1_dist" in df.columns:
             long_breakout = df["vwap_upper_1_dist"] > 0
             short_breakout = df["vwap_lower_1_dist"] < 0
         else:
             vwap = df["vwap"] if "vwap" in df.columns else close
             std = close.rolling(20).std().fillna(1.0)
-            up = vwap + std
-            low = vwap - std
-            long_breakout = close > up
-            short_breakout = close < low
+            long_breakout = close > vwap + std
+            short_breakout = close < vwap - std
 
         vol_squeeze = vol_ratio < 0.75
 
         signal = np.zeros(len(df), dtype=int)
-        long_mask = vol_squeeze & long_breakout
-        short_mask = vol_squeeze & short_breakout
-
-        signal[long_mask] = 1
-        signal[short_mask] = -1
+        signal[vol_squeeze & long_breakout] = 1
+        signal[vol_squeeze & short_breakout] = -1
         return pd.Series(signal, index=df.index)
-
-    @staticmethod
-    def apply_meta_triple_barrier(
-        events: pd.DataFrame, close: pd.Series, high: pd.Series, low: pd.Series, primary_signals: pd.Series, pt_sl: list[float]
-    ) -> pd.DataFrame:
-        """Apply secondary meta-labeling based on primary signals using ATR-based TP and SL."""
-        logger.info("Applying meta-labeling triple barrier evaluation with ATR barriers...")
-        out = pd.DataFrame(index=events.index)
-        
-        pt_mult = pt_sl[0] if len(pt_sl) > 0 else settings.PT_SL_RATIO[0]
-        sl_mult = pt_sl[1] if len(pt_sl) > 1 else settings.PT_SL_RATIO[1]
-
-        out["t1"] = events["t1"]
-        out["trgt"] = events["trgt"]
-
-        touch_times = []
-        meta_labels = []
-        returns = []
-        barrier_types = []
-
-        close_index_map = {ts: idx for idx, ts in enumerate(close.index)}
-        close_tz = close.index.tz
-
-        for loc, t1_time in events["t1"].items():
-            sig = primary_signals.loc[loc]
-            if sig == 0 or pd.isna(t1_time):
-                touch_times.append(loc)
-                meta_labels.append(0)
-                returns.append(0.0)
-                barrier_types.append("neutral")
-                continue
-
-            t1_dt = pd.to_datetime(t1_time)
-            if close_tz is not None:
-                if t1_dt.tz is None:
-                    t1_dt = t1_dt.tz_localize(close_tz)
-                else:
-                    t1_dt = t1_dt.tz_convert(close_tz)
-
-            if loc not in close_index_map:
-                touch_times.append(t1_dt)
-                meta_labels.append(0)
-                returns.append(0.0)
-                barrier_types.append("t1")
-                continue
-
-            price_start = close.loc[loc]
-            target_atr = events.loc[loc, "trgt"]
-
-            if sig == 1:
-                tp_limit = price_start + (pt_mult * target_atr)
-                sl_limit = price_start - (sl_mult * target_atr)
-            else:
-                tp_limit = price_start - (pt_mult * target_atr)
-                sl_limit = price_start + (sl_mult * target_atr)
-
-            future_slice_close = close.loc[loc:t1_dt]
-            future_slice_high = high.loc[loc:t1_dt] if high is not None else future_slice_close
-            future_slice_low = low.loc[loc:t1_dt] if low is not None else future_slice_close
-
-            if future_slice_close.empty or len(future_slice_close) <= 1:
-                touch_times.append(t1_dt)
-                meta_labels.append(0)
-                returns.append(0.0)
-                barrier_types.append("t1")
-                continue
-
-            future_highs = future_slice_high.iloc[1:]
-            future_lows = future_slice_low.iloc[1:]
-            future_closes = future_slice_close.iloc[1:]
-
-            t_tp = None
-            t_sl = None
-
-            if sig == 1:
-                touched_tp = future_highs[future_highs >= tp_limit]
-                touched_sl = future_lows[future_lows <= sl_limit]
-            else:
-                touched_tp = future_lows[future_lows <= tp_limit]
-                touched_sl = future_highs[future_highs >= sl_limit]
-
-            t_tp = touched_tp.index[0] if not touched_tp.empty else None
-            t_sl = touched_sl.index[0] if not touched_sl.empty else None
-
-            first_touch_time = t1_dt
-            barrier_type = "t1"
-            meta_label = 0
-
-            if t_tp is not None and t_sl is not None:
-                if t_tp < t_sl:
-                    first_touch_time = t_tp
-                    barrier_type = "tp"
-                    meta_label = 1
-                else:
-                    first_touch_time = t_sl
-                    barrier_type = "sl"
-                    meta_label = 0
-            elif t_tp is not None:
-                first_touch_time = t_tp
-                barrier_type = "tp"
-                meta_label = 1
-            elif t_sl is not None:
-                first_touch_time = t_sl
-                barrier_type = "sl"
-                meta_label = 0
-
-            exit_price = close.loc[first_touch_time] if first_touch_time in close.index else future_closes.iloc[-1]
-            ret = (exit_price - price_start) / price_start * sig
-
-            touch_times.append(first_touch_time)
-            meta_labels.append(meta_label)
-            returns.append(ret)
-            barrier_types.append(barrier_type)
-
-        out["touch_time"] = touch_times
-        out["target_label"] = meta_labels
-        out["target_return"] = returns
-        out["barrier_touched"] = barrier_types
-        out["primary_signal"] = primary_signals
-
-        return out
 
     @classmethod
     def get_labels(
         cls, df: pl.DataFrame, pt_sl: list[float] = settings.PT_SL_RATIO, num_bars: int = settings.MAX_HOLD_HOURS
     ) -> pl.DataFrame:
-        """Main interface to compute Meta-Labels for a Polars feature DataFrame."""
+        """Label every primary-signal bar with the shared barrier simulator.
+
+        Output keeps only signal bars whose outcome is resolved, with columns:
+        primary_signal, target_label (1 = take profit hit first), target_return (gross barrier return),
+        barrier_touched ("tp"/"sl"/"t1") and t1 (actual exit timestamp, used for purging and concurrency).
+        """
         logger.info("Starting Meta-Labeling pipeline...")
         if df.is_empty():
             return df
-
-        pdf = df.to_pandas()
-        if "timestamp" not in pdf.columns:
+        if "timestamp" not in df.columns:
             raise ValueError("DataFrame must contain a 'timestamp' column.")
 
+        pdf = df.sort("timestamp").to_pandas()
         pdf["timestamp"] = pd.to_datetime(pdf["timestamp"])
-        pdf = pdf.set_index("timestamp").sort_index()
+        open_, high, low, close = (pdf[c].to_numpy(dtype=float) for c in ("open", "high", "low", "close"))
+        atr_values = atr(pdf["high"], pdf["low"], pdf["close"], settings.ATR_PERIOD).to_numpy()
+        signals = cls.get_primary_signal(pdf).to_numpy()
+        pt_mult, sl_mult = pt_sl
 
-        close = pdf["close"]
-        high = pdf["high"] if "high" in pdf.columns else close
-        low = pdf["low"] if "low" in pdf.columns else close
+        rows: list[tuple[int, int, int, float, str]] = []
+        for i in np.flatnonzero(signals):
+            if not np.isfinite(atr_values[i]) or atr_values[i] <= 0:
+                continue
+            outcome = simulate_trade(open_, high, low, close, i, int(signals[i]), atr_values[i], pt_mult, sl_mult, num_bars)
+            if outcome is None:
+                continue  # data ends before the barrier resolves: label unknown
+            ret = (outcome.exit_price - close[i]) / close[i] * signals[i]
+            rows.append((i, outcome.exit_idx, int(outcome.barrier == "tp"), ret, outcome.barrier))
 
-        atr = cls.get_atr_volatility(close, high, low, period=settings.ATR_PERIOD)
-        t1 = cls.get_vertical_barriers(pdf.index, num_bars=num_bars)
-        primary_signals = cls.get_primary_signal(pdf)
+        if not rows:
+            logger.warning("Meta-labeling produced no resolved signal records.")
+            return pl.DataFrame()
 
-        events = pd.DataFrame(index=pdf.index)
-        events["t1"] = t1
-        events["trgt"] = atr
+        idx, exit_idx, labels, returns, barriers = zip(*rows)
+        out = pdf.iloc[list(idx)].copy()
+        out["primary_signal"] = signals[list(idx)]
+        out["target_label"] = labels
+        out["target_return"] = returns
+        out["barrier_touched"] = barriers
+        out["t1"] = pdf["timestamp"].to_numpy()[list(exit_idx)]
 
-        events = events.dropna(subset=["trgt"])
-        events = events[events["trgt"] > 0]
-
-        labels_pdf = cls.apply_meta_triple_barrier(events, close, high, low, primary_signals, pt_sl=pt_sl)
-
-        pdf["primary_signal"] = labels_pdf["primary_signal"]
-        pdf["target_label"] = labels_pdf["target_label"]
-        pdf["target_return"] = labels_pdf["target_return"]
-        pdf["barrier_touched"] = labels_pdf["barrier_touched"]
-        pdf["t1"] = labels_pdf["t1"]
-
-        pdf = pdf.reset_index()
-        result_df = pl.from_pandas(pdf)
-        result_df = result_df.filter(pl.col("primary_signal") != 0)
-
+        result_df = pl.from_pandas(out.reset_index(drop=True))
         logger.success(f"Meta-labeling complete. Produced {len(result_df)} active signal records.")
         return result_df

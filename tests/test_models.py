@@ -72,3 +72,29 @@ def test_model_storage_save_load(tmp_path: Path) -> None:
     assert isinstance(loaded_model, QuantModelTrainer)
     assert loaded_meta["symbol"] == symbol
     assert loaded_meta["metrics"]["accuracy"] == 0.85
+
+
+def test_walk_forward_leaves_unscored_rows_nan_and_keeps_params() -> None:
+    """Rows the walk-forward never scored must stay NaN (not 0.5) so they can never trade."""
+    from datetime import datetime, timedelta, timezone
+
+    rng = np.random.default_rng(3)
+    n = 300
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ts = [t0 + timedelta(hours=i) for i in range(n)]
+    df = pl.DataFrame(
+        {
+            "timestamp": ts,
+            "t1": [t + timedelta(hours=2) for t in ts],
+            "feat_1": rng.normal(size=n),
+            "target_label": rng.integers(0, 2, size=n),
+            "sample_weight": np.ones(n),
+        }
+    )
+    trainer = QuantModelTrainer(n_estimators=7, max_depth=2, num_leaves=3)
+    probs = trainer.cross_val_predict_walk_forward(df, feature_cols=["feat_1"], n_splits=5)
+
+    scored = ~np.isnan(probs[:, 1])
+    assert not scored[:50].any() and scored[-50:].all()
+    assert 0.0 <= QuantModelTrainer.oos_roc_auc(df, probs) <= 1.0
+    assert trainer.model.get_params()["num_leaves"] == 3

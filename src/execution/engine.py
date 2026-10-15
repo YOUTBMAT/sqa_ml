@@ -1,5 +1,6 @@
 """Asynchronous execution engine supporting Paper and Live trading modes via CCXT Async and RiskManager."""
 
+from datetime import datetime
 import ccxt.async_support as ccxt_async
 from config.settings import settings
 from src.risk.manager import RiskManager
@@ -10,10 +11,12 @@ from src.utils.logger import logger
 class ExecutionEngine:
     """Orchestrator for routing orders to Paper Trader or Live Exchange via CCXT."""
 
-    def __init__(self, mode: str = "PAPER", exchange_id: str = "binance", load_saved_state: bool = True) -> None:
+    def __init__(
+        self, mode: str = "PAPER", exchange_id: str = "binance", load_saved_state: bool = True, state_dir: str = "data/paper"
+    ) -> None:
         self.mode = mode.upper()
         self.exchange_id = exchange_id
-        self.paper_trader = PaperTrader(initial_balance=10000.0, load_saved_state=load_saved_state)
+        self.paper_trader = PaperTrader(initial_balance=10000.0, load_saved_state=load_saved_state, state_dir=state_dir)
         
         exchange_class = getattr(ccxt_async, exchange_id)
         self.exchange = exchange_class({"enableRateLimit": True})
@@ -42,12 +45,16 @@ class ExecutionEngine:
         take_profit: float | None = None,
         peak_equity: float = 10000.0,
         daily_pnl_pct: float = 0.0,
+        current_equity: float | None = None,
+        entry_bar_ts: datetime | None = None,
+        expires_at: datetime | None = None,
     ) -> dict:
         """Validate order with RiskManager circuit breaker and route to Paper or Live exchange."""
         logger.info(f"[{self.mode}] Requesting order placement: {side.upper()} {amount} {symbol}...")
 
         # 1. Pre-trade Risk Validation (Circuit Breaker check)
-        current_equity = self.paper_trader.balance if self.mode == "PAPER" else 10000.0
+        if current_equity is None:
+            current_equity = self.paper_trader.balance if self.mode == "PAPER" else 10000.0
         if not risk_manager.check_circuit_breaker(current_equity, peak_equity, daily_pnl_pct):
             logger.error(f"[{self.mode}] Order REJECTED by RiskManager Circuit Breaker.")
             raise PermissionError("Order rejected: Circuit breaker active due to drawdown limits.")
@@ -65,6 +72,8 @@ class ExecutionEngine:
                     current_price=current_price,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
+                    entry_bar_ts=entry_bar_ts,
+                    expires_at=expires_at,
                 )
                 return order
             else:
