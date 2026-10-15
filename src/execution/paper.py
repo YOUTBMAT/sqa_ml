@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from config.settings import settings
+from src.labeling.barriers import check_bar
 from src.utils.logger import logger
+
+DATETIME_FIELDS = ("timestamp", "entry_bar_ts", "expires_at")
 
 
 class PaperTrader:
@@ -117,8 +120,9 @@ class PaperTrader:
             # Restore positions and order history with datetime parsing
             raw_positions = loaded_data.get("positions", {})
             for sym, pos in raw_positions.items():
-                if isinstance(pos.get("timestamp"), str):
-                    pos["timestamp"] = datetime.fromisoformat(pos["timestamp"])
+                for field in DATETIME_FIELDS:
+                    if isinstance(pos.get(field), str):
+                        pos[field] = datetime.fromisoformat(pos[field])
             self.positions = raw_positions
 
             raw_orders = loaded_data.get("order_history", [])
@@ -145,6 +149,8 @@ class PaperTrader:
         order_type: str = "market",
         stop_loss: float | None = None,
         take_profit: float | None = None,
+        entry_bar_ts: datetime | None = None,
+        expires_at: datetime | None = None,
     ) -> dict:
         """Execute virtual order with slippage, fee deductions, and state persistence supporting LONG and SHORT."""
         logger.info(f"[PAPER] Executing {side.upper()} order for {amount} {symbol} at ~{current_price}...")
@@ -183,6 +189,8 @@ class PaperTrader:
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
                     "timestamp": datetime.now(timezone.utc),
+                    "entry_bar_ts": entry_bar_ts,
+                    "expires_at": expires_at,
                 }
             else:
                 # Open SHORT
@@ -195,6 +203,8 @@ class PaperTrader:
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
                     "timestamp": datetime.now(timezone.utc),
+                    "entry_bar_ts": entry_bar_ts,
+                    "expires_at": expires_at,
                 }
         else:
             # Closing existing position
@@ -231,55 +241,49 @@ class PaperTrader:
         logger.success(f"[PAPER] Order filled: {order_record}")
         return order_record
 
-    def update_positions(self, current_prices: dict[str, float]) -> list[dict]:
-        """Check open positions against current market prices for stop-loss and take-profit hits."""
+    def update_positions(self, bars_by_symbol: dict[str, list[dict]]) -> list[dict]:
+        """Check open positions against closed OHLC bars (oldest first) for SL/TP and the time barrier.
+
+        Same rules as labeling and backtest: only bars after the entry bar count, the stop wins on
+        ambiguous bars, gaps fill at the open, and the time barrier closes at the close of the bar
+        starting at expires_at.
+        """
         triggered_events = []
         for symbol, pos in list(self.positions.items()):
-            if symbol not in current_prices:
+            exit_hit = self._find_exit(pos, bars_by_symbol.get(symbol, []))
+            if exit_hit is None:
                 continue
-
-            price = current_prices[symbol]
-            sl = pos.get("stop_loss")
-            tp = pos.get("take_profit")
-            side = pos["side"]
-
-            hit = False
-            exit_reason = None
-
-            if side == "long":
-                if sl is not None and price <= sl:
-                    hit = True
-                    exit_reason = "stop_loss"
-                elif tp is not None and price >= tp:
-                    hit = True
-                    exit_reason = "take_profit"
-            else: # short
-                if sl is not None and price >= sl:
-                    hit = True
-                    exit_reason = "stop_loss"
-                elif tp is not None and price <= tp:
-                    hit = True
-                    exit_reason = "take_profit"
-
-            # Check 24h time barrier
-            if not hit:
-                entry_time = pos.get("timestamp")
-                if entry_time is not None:
-                    if entry_time.tzinfo is None:
-                        entry_time = entry_time.replace(tzinfo=timezone.utc)
-                    now = datetime.now(timezone.utc)
-                    if now >= entry_time + timedelta(hours=settings.MAX_HOLD_HOURS):
-                        hit = True
-                        exit_reason = "TIME_BARRIER_24H"
-
-            if hit:
-                logger.warning(f"[PAPER] Position {symbol} hit {exit_reason} at price {price}.")
-                close_side = "sell" if side == "long" else "buy"
-                fill = self.execute_paper_order(symbol, close_side, pos["amount"], price)
-                fill["exit_reason"] = exit_reason
-                triggered_events.append(fill)
+            exit_reason, price = exit_hit
+            logger.warning(f"[PAPER] Position {symbol} hit {exit_reason} at price {price}.")
+            close_side = "sell" if pos["side"] == "long" else "buy"
+            fill = self.execute_paper_order(symbol, close_side, pos["amount"], price)
+            fill["exit_reason"] = exit_reason
+            triggered_events.append(fill)
 
         return triggered_events
+
+    @staticmethod
+    def _find_exit(pos: dict, bars: list[dict]) -> tuple[str, float] | None:
+        """Return (exit_reason, exit_price) for the first bar that resolves the position, if any."""
+        side = 1 if pos["side"] == "long" else -1
+        sl, tp = pos.get("stop_loss"), pos.get("take_profit")
+        # Positions saved before entry_bar_ts existed: the signal bar is the hour before the fill.
+        entry_bar_ts = pos.get("entry_bar_ts") or (
+            pos["timestamp"].replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+        )
+        expires_at = pos.get("expires_at") or entry_bar_ts + timedelta(hours=settings.MAX_HOLD_HOURS)
+        reasons = {"sl": "stop_loss", "tp": "take_profit"}
+
+        for bar in bars:
+            if bar["timestamp"] <= entry_bar_ts:
+                continue
+            if sl is not None and tp is not None:
+                hit = check_bar(side, tp, sl, bar["open"], bar["high"], bar["low"])
+                if hit is not None:
+                    return reasons[hit[0]], hit[1]
+            if expires_at is not None and bar["timestamp"] >= expires_at:
+                return "TIME_BARRIER_24H", bar["close"]
+        return None
 
     def get_account_summary(self) -> dict:
         """Return current virtual account balance and open positions."""

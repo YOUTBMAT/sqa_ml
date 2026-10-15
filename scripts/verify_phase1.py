@@ -1,6 +1,7 @@
 """Strict validation script for Phase 1: Safety Live Lock, Inference Window Parity, and Atomic Persistence."""
 
 import sys
+import tempfile
 import os
 import json
 from pathlib import Path
@@ -81,7 +82,7 @@ def test_c_atomic_persistence() -> None:
     """Test C: Simulate write interruption/corruption on paper_portfolio.json and verify restoration from .bak."""
     logger.info("Running Test C: Atomic persistence and backup recovery verification...")
 
-    state_dir = Path("data/paper")
+    state_dir = Path(tempfile.mkdtemp())  # never touch the live paper portfolio
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / "paper_portfolio.json"
     backup_file = state_dir / "paper_portfolio.json.bak"

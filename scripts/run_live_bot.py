@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import sys
 
+from config.settings import settings
 from src.execution.runner import BotRunner
 from src.utils.logger import logger
 
@@ -14,7 +15,7 @@ def main() -> None:
     parser.add_argument(
         "--symbols",
         nargs="+",
-        default=["BTC/USDT"],
+        default=settings.SYMBOLS,
         help="List of symbols to trade (e.g., BTC/USDT ETH/USDT)",
     )
     parser.add_argument(
@@ -39,8 +40,8 @@ def main() -> None:
     parser.add_argument(
         "--buy-threshold",
         type=float,
-        default=0.65,
-        help="Probability threshold for Long/Short entries",
+        default=settings.PROB_THRESHOLD,
+        help="Minimum P(y=1) to confirm the primary Long/Short signal",
     )
 
     args = parser.parse_args()
@@ -56,7 +57,6 @@ def main() -> None:
         mode=args.mode,
         poll_interval_seconds=args.poll_interval,
         buy_threshold=args.buy_threshold,
-        sell_threshold=1.0 - args.buy_threshold,
     )
 
     try:

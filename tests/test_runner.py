@@ -71,3 +71,9 @@ async def test_bot_runner_single_iteration(
 
     await runner._process_symbol("BTC/USDT", mock_engine)
     mock_engine.place_order.assert_awaited()
+    kwargs = mock_engine.place_order.await_args.kwargs
+    # Same barriers as labels/backtest: ATR-14 (true range is 10 on every mock bar), TP 1.5x, SL 1.0x.
+    assert kwargs["stop_loss"] == pytest.approx(102.0 - 10.0)
+    assert kwargs["take_profit"] == pytest.approx(102.0 + 15.0)
+    assert kwargs["entry_bar_ts"] == timestamps[-1]
+    assert kwargs["expires_at"] == timestamps[-1] + timedelta(hours=24)

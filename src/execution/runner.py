@@ -5,8 +5,11 @@ import signal
 from datetime import datetime, timezone, timedelta
 import polars as pl
 
+from config.settings import settings
+
 from src.data.collectors.crypto import CryptoCollector
 from src.features.pipeline import FeaturePipeline
+from src.labeling.barriers import atr
 from src.models.storage import ModelStorage
 from src.risk.manager import RiskManager
 from src.execution.engine import ExecutionEngine
@@ -23,8 +26,7 @@ class BotRunner:
         timeframe: str = "1h",
         mode: str = "PAPER",
         poll_interval_seconds: int = 60,
-        buy_threshold: float = 0.75,
-        sell_threshold: float = 0.25,
+        buy_threshold: float = settings.PROB_THRESHOLD,
     ) -> None:
         self.symbols = symbols
         self.timeframe = timeframe
@@ -33,7 +35,6 @@ class BotRunner:
             raise RuntimeError("O modo LIVE esta temporariamente desativado ate a conclusao total da auditoria e re-treino do sistema.")
         self.poll_interval = poll_interval_seconds
         self.buy_threshold = buy_threshold
-        self.sell_threshold = sell_threshold
         self.is_running = False
         self.last_processed_candle_ts: dict[str, datetime] = {}
 
@@ -42,16 +43,16 @@ class BotRunner:
         self.model_storage = ModelStorage()
         self.feature_pipeline = FeaturePipeline()
 
-        # Handle graceful shutdown
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                asyncio.get_running_loop().add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
-            except Exception:
-                pass  # Signal handlers might not be supported in certain OS threads
-
     async def start(self) -> None:
         """Start the continuous execution loop."""
         self.is_running = True
+        # Graceful shutdown on SIGINT/SIGTERM (systemd stop); needs the running loop, so it is installed here
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
+            except NotImplementedError:
+                logger.warning(f"Signal handler for {sig.name} not supported on this platform.")
         logger.info(f"=== BOT RUNNER STARTED [{self.mode}] for symbols: {self.symbols} ===")
         await self.notifier.send_message(f"<b>🤖 SQA-ML BOT STARTED</b>\nMode: <b>{self.mode}</b>\nSymbols: {', '.join(self.symbols)}")
 
@@ -94,11 +95,10 @@ class BotRunner:
             logger.warning(f"No closed candles available for {symbol} after candle lock filter.")
             return
 
-        latest_price = float(df_candles["close"][-1])
-
-        # 0. Update positions for SL/TP check in paper mode
+        # 0. Resolve open paper positions against closed bars with the same barrier rules as labels/backtest
         if self.mode == "PAPER":
-            engine.paper_trader.update_positions({symbol: latest_price})
+            bars = df_candles.select(["timestamp", "open", "high", "low", "close"]).to_dicts()
+            engine.paper_trader.update_positions({symbol: bars})
             if engine.paper_trader.has_open_position(symbol):
                 logger.debug(f"Position already open for {symbol}. Skipping new entry.")
                 return
@@ -137,7 +137,9 @@ class BotRunner:
         p_y1 = latest_prob[1]
 
         current_price = float(df_features["close"][-1])
-        atr = current_price * 0.02
+        pdf_candles = df_candles.select(["high", "low", "close"]).to_pandas()
+        atr_value = float(atr(pdf_candles["high"], pdf_candles["low"], pdf_candles["close"], settings.ATR_PERIOD).iloc[-1])
+        pt_mult, sl_mult = settings.PT_SL_RATIO
 
         # 4. Risk Evaluation & Sizing (2-Stage Confirmation: Primary != 0 and P(y=1) >= buy_threshold)
         balance_info = await engine.get_account_balance()
@@ -155,12 +157,14 @@ class BotRunner:
                 account_balance=account_balance,
                 current_price=current_price,
                 win_probability=float(p_y1),
-                reward_risk_ratio=2.0,
-                volatility=0.02,
+                reward_risk_ratio=pt_mult / sl_mult,
+                volatility=atr_value / current_price,
                 active_positions=active_positions,
             )
 
-            sl, tp = self.risk_manager.calculate_dynamic_stops(current_price, side, atr, sl_atr_mult=1.0, tp_atr_mult=2.0)
+            sl, tp = self.risk_manager.calculate_dynamic_stops(
+                current_price, side, atr_value, sl_atr_mult=sl_mult, tp_atr_mult=pt_mult
+            )
 
             # 5. Order Execution & Routing
             try:
@@ -172,6 +176,8 @@ class BotRunner:
                     risk_manager=self.risk_manager,
                     stop_loss=sl,
                     take_profit=tp,
+                    entry_bar_ts=latest_candle_ts,
+                    expires_at=latest_candle_ts + timedelta(hours=settings.MAX_HOLD_HOURS),
                 )
 
                 # 6. Notifications
