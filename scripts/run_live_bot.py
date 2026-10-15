@@ -45,6 +45,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.mode.upper() == "LIVE":
+        raise RuntimeError("O modo LIVE esta temporariamente desativado ate a conclusao total da auditoria e re-treino do sistema.")
+
     logger.info("=== INITIALIZING SQA-ML LIVE/PAPER BOT CLI ===")
 
     runner = BotRunner(

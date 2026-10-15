@@ -34,7 +34,9 @@ class PaperTrader:
             self._save_state()
 
     def _save_state(self) -> None:
-        """Save paper portfolio state to JSON file."""
+        """Save paper portfolio state to JSON file atomically using tmp file, fsync, and backup."""
+        import os
+        import shutil
         try:
             state = {
                 "balance": self.balance,
@@ -48,43 +50,86 @@ class PaperTrader:
                     return obj.isoformat()
                 raise TypeError(f"Type {type(obj)} not serializable")
 
-            with open(self.state_file, "w", encoding="utf-8") as f:
+            temp_file = self.state_file.with_suffix(".json.tmp")
+            backup_file = self.state_file.with_suffix(".json.bak")
+
+            # 1. Write to temporary file
+            with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(state, f, default=_serialize, indent=4)
-            logger.info("Paper trader state successfully persisted to disk.")
+                f.flush()
+                os.fsync(f.fileno())
+
+            # 2. Create backup of current state file if it exists
+            if self.state_file.exists():
+                try:
+                    shutil.copy(self.state_file, backup_file)
+                except Exception as ex:
+                    logger.warning(f"Failed to create backup file: {ex}")
+
+            # 3. Atomically replace main file with temporary file
+            os.replace(temp_file, self.state_file)
+            logger.info("Paper trader state successfully persisted to disk atomically.")
         except Exception as e:
             logger.error(f"Failed to save paper trader state: {e}")
+            raise
 
     def _load_state(self) -> None:
-        """Load paper portfolio state from JSON file if it exists."""
-        if not self.state_file.exists():
+        """Load paper portfolio state from JSON file with fallback to backup. Never overwrite with zero balance if corrupted."""
+        import shutil
+        backup_file = self.state_file.with_suffix(".json.bak")
+
+        if not self.state_file.exists() and not backup_file.exists():
             logger.info("No existing paper portfolio state found. Initializing fresh state.")
             self._save_state()
             return
 
+        loaded_data = None
+        source_loaded = None
+
+        # Try loading primary state file
+        if self.state_file.exists():
+            try:
+                with open(self.state_file, "r", encoding="utf-8") as f:
+                    loaded_data = json.load(f)
+                source_loaded = "primary"
+            except Exception as e:
+                logger.error(f"Primary state file corrupted ({e}). Attempting fallback to backup...")
+
+        # If primary failed or doesn't exist, try backup
+        if loaded_data is None and backup_file.exists():
+            try:
+                with open(backup_file, "r", encoding="utf-8") as f:
+                    loaded_data = json.load(f)
+                source_loaded = "backup"
+                logger.warning("Successfully recovered paper portfolio state from backup file.")
+                shutil.copy(backup_file, self.state_file)
+            except Exception as e:
+                logger.error(f"Backup state file also corrupted ({e}).")
+
+        if loaded_data is None:
+            raise RuntimeError("Paper portfolio state file and backup are both missing or corrupted. Refusing to initialize with zero balance.")
+
         try:
-            with open(self.state_file, "r", encoding="utf-8") as f:
-                state = json.load(f)
-            
-            self.balance = float(state.get("balance", self.initial_balance))
-            self.initial_balance = float(state.get("initial_balance", self.initial_balance))
+            self.balance = float(loaded_data.get("balance", self.initial_balance))
+            self.initial_balance = float(loaded_data.get("initial_balance", self.initial_balance))
             
             # Restore positions and order history with datetime parsing
-            raw_positions = state.get("positions", {})
+            raw_positions = loaded_data.get("positions", {})
             for sym, pos in raw_positions.items():
                 if isinstance(pos.get("timestamp"), str):
                     pos["timestamp"] = datetime.fromisoformat(pos["timestamp"])
             self.positions = raw_positions
 
-            raw_orders = state.get("order_history", [])
+            raw_orders = loaded_data.get("order_history", [])
             for ord_rec in raw_orders:
                 if isinstance(ord_rec.get("timestamp"), str):
                     ord_rec["timestamp"] = datetime.fromisoformat(ord_rec["timestamp"])
             self.order_history = raw_orders
 
-            logger.success(f"Successfully loaded paper portfolio state from {self.state_file} (Balance: ${self.balance:,.2f})")
+            logger.success(f"Successfully loaded paper portfolio state from {source_loaded} (Balance: ${self.balance:,.2f})")
         except Exception as e:
-            logger.error(f"Failed to load paper trader state: {e}. Initializing fresh state.")
-            self._save_state()
+            logger.error(f"Failed to parse paper portfolio state data: {e}")
+            raise RuntimeError(f"Failed to parse paper portfolio state data: {e}")
 
     def has_open_position(self, symbol: str) -> bool:
         """Check if there is an active open position for the given symbol."""

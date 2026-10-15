@@ -29,6 +29,8 @@ class BotRunner:
         self.symbols = symbols
         self.timeframe = timeframe
         self.mode = mode.upper()
+        if self.mode == "LIVE":
+            raise RuntimeError("O modo LIVE esta temporariamente desativado ate a conclusao total da auditoria e re-treino do sistema.")
         self.poll_interval = poll_interval_seconds
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
@@ -74,9 +76,9 @@ class BotRunner:
         """Process a single symbol iteration (Collect -> Feature -> Predict -> Risk -> Execute -> Notify)."""
         logger.info(f"Processing iteration for {symbol}...")
 
-        # 1. Data Collection (fetching recent candles)
+        # 1. Data Collection (fetching recent candles - ~2000 candles for FFD & EMA-200 convergence)
         now = datetime.now(timezone.utc)
-        start_time = now - timedelta(days=5)
+        start_time = now - timedelta(days=90)
 
         async with CryptoCollector() as collector:
             df_candles = await collector.fetch_ohlcv_historical(symbol, self.timeframe, start_time, now)
