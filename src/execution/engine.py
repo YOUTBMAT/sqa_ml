@@ -45,6 +45,7 @@ class ExecutionEngine:
         take_profit: float | None = None,
         peak_equity: float = 10000.0,
         daily_pnl_pct: float = 0.0,
+        current_equity: float | None = None,
         entry_bar_ts: datetime | None = None,
         expires_at: datetime | None = None,
     ) -> dict:
@@ -52,7 +53,8 @@ class ExecutionEngine:
         logger.info(f"[{self.mode}] Requesting order placement: {side.upper()} {amount} {symbol}...")
 
         # 1. Pre-trade Risk Validation (Circuit Breaker check)
-        current_equity = self.paper_trader.balance if self.mode == "PAPER" else 10000.0
+        if current_equity is None:
+            current_equity = self.paper_trader.balance if self.mode == "PAPER" else 10000.0
         if not risk_manager.check_circuit_breaker(current_equity, peak_equity, daily_pnl_pct):
             logger.error(f"[{self.mode}] Order REJECTED by RiskManager Circuit Breaker.")
             raise PermissionError("Order rejected: Circuit breaker active due to drawdown limits.")

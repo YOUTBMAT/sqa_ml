@@ -31,6 +31,9 @@ class PaperTrader:
         self.balance = initial_balance
         self.positions: dict[str, dict] = {}
         self.order_history: list[dict] = []
+        self.peak_equity = initial_balance
+        self.day_start_equity = initial_balance
+        self.equity_day: str | None = None
 
         if load_saved_state:
             self._load_state()
@@ -47,6 +50,9 @@ class PaperTrader:
                 "initial_balance": self.initial_balance,
                 "positions": self.positions,
                 "order_history": self.order_history,
+                "peak_equity": self.peak_equity,
+                "day_start_equity": self.day_start_equity,
+                "equity_day": self.equity_day,
             }
             # Serialize datetimes to isoformat
             def _serialize(obj):
@@ -116,6 +122,9 @@ class PaperTrader:
         try:
             self.balance = float(loaded_data.get("balance", self.initial_balance))
             self.initial_balance = float(loaded_data.get("initial_balance", self.initial_balance))
+            self.peak_equity = float(loaded_data.get("peak_equity", max(self.balance, self.initial_balance)))
+            self.day_start_equity = float(loaded_data.get("day_start_equity", self.balance))
+            self.equity_day = loaded_data.get("equity_day")
             
             # Restore positions and order history with datetime parsing
             raw_positions = loaded_data.get("positions", {})
@@ -135,6 +144,25 @@ class PaperTrader:
         except Exception as e:
             logger.error(f"Failed to parse paper portfolio state data: {e}")
             raise RuntimeError(f"Failed to parse paper portfolio state data: {e}")
+
+    def mark_equity(self, prices: dict[str, float]) -> float:
+        """Mark-to-market equity (cash plus long value minus short liability) and update peak and daily anchors.
+
+        Positions without a price in `prices` are valued at their entry price.
+        """
+        equity = self.balance
+        for symbol, pos in self.positions.items():
+            sign = 1.0 if pos["side"] == "long" else -1.0
+            equity += sign * pos["amount"] * prices.get(symbol, pos["entry_price"])
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        if today != self.equity_day or equity > self.peak_equity:
+            if today != self.equity_day:
+                self.equity_day = today
+                self.day_start_equity = equity
+            self.peak_equity = max(self.peak_equity, equity)
+            self._save_state()
+        return equity
 
     def has_open_position(self, symbol: str) -> bool:
         """Check if there is an active open position for the given symbol."""

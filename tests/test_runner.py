@@ -68,6 +68,9 @@ async def test_bot_runner_single_iteration(
     mock_engine.get_account_balance = AsyncMock(return_value={"free": 10000.0})
     mock_engine.place_order = AsyncMock(return_value={"status": "filled"})
     mock_engine.paper_trader.has_open_position.return_value = False
+    mock_engine.paper_trader.mark_equity.return_value = 9500.0
+    mock_engine.paper_trader.peak_equity = 10000.0
+    mock_engine.paper_trader.day_start_equity = 9800.0
 
     await runner._process_symbol("BTC/USDT", mock_engine)
     mock_engine.place_order.assert_awaited()
@@ -77,3 +80,6 @@ async def test_bot_runner_single_iteration(
     assert kwargs["take_profit"] == pytest.approx(102.0 + 15.0)
     assert kwargs["entry_bar_ts"] == timestamps[-1]
     assert kwargs["expires_at"] == timestamps[-1] + timedelta(hours=24)
+    # Circuit breaker gets real mark-to-market numbers, not hardcoded defaults.
+    assert kwargs["current_equity"] == 9500.0 and kwargs["peak_equity"] == 10000.0
+    assert kwargs["daily_pnl_pct"] == pytest.approx(9500.0 / 9800.0 - 1.0)

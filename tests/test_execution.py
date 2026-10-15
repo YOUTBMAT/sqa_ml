@@ -64,6 +64,17 @@ def test_paper_state_round_trip_keeps_barrier_times(tmp_path) -> None:
     assert pos["entry_bar_ts"] == T0 and pos["expires_at"] == T0 + timedelta(hours=24)
 
 
+def test_mark_to_market_equity_long_and_short(tmp_path) -> None:
+    trader = PaperTrader(initial_balance=10000.0, fee_rate=0.0, slippage_rate=0.0, load_saved_state=False, state_dir=str(tmp_path))
+    trader.execute_paper_order("ETH/USDT", "sell", 1.0, 2000.0)  # short proceeds are a liability, not profit
+    assert trader.balance == pytest.approx(12000.0)
+    assert trader.mark_equity({"ETH/USDT": 2000.0}) == pytest.approx(10000.0)
+    assert trader.mark_equity({"ETH/USDT": 2100.0}) == pytest.approx(9900.0)
+    assert trader.peak_equity == pytest.approx(10000.0)
+    assert trader.mark_equity({"ETH/USDT": 1800.0}) == pytest.approx(10200.0)
+    assert PaperTrader(load_saved_state=True, state_dir=str(tmp_path)).peak_equity == pytest.approx(10200.0)
+
+
 @pytest.mark.asyncio
 async def test_execution_engine_risk_integration(tmp_path) -> None:
     """Test ExecutionEngine integrates with RiskManager to block orders when circuit breaker triggers."""

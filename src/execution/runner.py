@@ -142,8 +142,20 @@ class BotRunner:
         pt_mult, sl_mult = settings.PT_SL_RATIO
 
         # 4. Risk Evaluation & Sizing (2-Stage Confirmation: Primary != 0 and P(y=1) >= buy_threshold)
-        balance_info = await engine.get_account_balance()
-        account_balance = float(balance_info.get("free", 10000.0) if isinstance(balance_info, dict) else 10000.0)
+        risk_state: dict = {}
+        if self.mode == "PAPER":
+            paper = engine.paper_trader
+            # ponytail: marks only this symbol's price; other open symbols are valued at entry until their own iteration
+            equity = paper.mark_equity({symbol: current_price})
+            account_balance = equity
+            risk_state = {
+                "current_equity": equity,
+                "peak_equity": paper.peak_equity,
+                "daily_pnl_pct": equity / paper.day_start_equity - 1.0 if paper.day_start_equity > 0 else 0.0,
+            }
+        else:
+            balance_info = await engine.get_account_balance()
+            account_balance = float(balance_info.get("free", 10000.0) if isinstance(balance_info, dict) else 10000.0)
 
         side = None
         if latest_signal == 1 and p_y1 >= self.buy_threshold:
@@ -174,6 +186,7 @@ class BotRunner:
                     amount=amount,
                     current_price=current_price,
                     risk_manager=self.risk_manager,
+                    **risk_state,
                     stop_loss=sl,
                     take_profit=tp,
                     entry_bar_ts=latest_candle_ts,
@@ -193,7 +206,9 @@ class BotRunner:
             except PermissionError as pe:
                 logger.warning(f"Order blocked by risk management for {symbol}: {pe}")
                 if not self.risk_manager.circuit_breaker_notified:
-                    await self.notifier.notify_circuit_breaker(str(pe), current_drawdown=0.05)
+                    peak = risk_state.get("peak_equity", 0.0)
+                    drawdown = 1.0 - risk_state["current_equity"] / peak if peak > 0 else 0.0
+                    await self.notifier.notify_circuit_breaker(str(pe), current_drawdown=drawdown)
                     self.risk_manager.circuit_breaker_notified = True
             except Exception as ex:
                 logger.error(f"Failed to place order for {symbol}: {ex}")
