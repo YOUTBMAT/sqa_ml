@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from lightgbm import LGBMClassifier
+from sklearn.base import clone
 from sklearn.metrics import log_loss, accuracy_score, roc_auc_score
 from config.settings import settings
 from src.utils.logger import logger
@@ -114,6 +115,15 @@ class QuantModelTrainer:
         pdf = df.select(feature_cols).to_pandas()
         return self.model.predict_proba(pdf)
 
+    @staticmethod
+    def oos_roc_auc(df: pl.DataFrame, oos_probs: np.ndarray, target_col: str = "target_label") -> float:
+        """ROC AUC over the rows that were actually scored out-of-sample (NaN when undefined)."""
+        scored = ~np.isnan(oos_probs[:, 1])
+        y_true = df[target_col].to_numpy()[scored]
+        if scored.sum() == 0 or len(np.unique(y_true)) < 2:
+            return float("nan")
+        return float(roc_auc_score(y_true, oos_probs[scored, 1]))
+
     def cross_val_predict_walk_forward(
         self,
         df: pl.DataFrame,
@@ -130,28 +140,17 @@ class QuantModelTrainer:
         cv = PurgedGroupTimeSeriesSplit(n_splits=n_splits, pct_embargo=pct_embargo)
         pdf = df.to_pandas()
 
-        # Initialize OOS probability array with shape (len(df), 2) initialized to [0.5, 0.5]
-        oos_probs = np.full((len(df), 2), [0.5, 0.5])
+        # Rows never scored out-of-sample (the first fold has no training history) stay NaN
+        oos_probs = np.full((len(df), 2), np.nan)
 
         for fold, (train_idx, test_idx) in enumerate(cv.split(pdf)):
             if len(train_idx) == 0 or len(test_idx) == 0:
                 continue
 
-            train_df = pl.from_pandas(pdf.iloc[train_idx])
-            test_df = pl.from_pandas(pdf.iloc[test_idx])
-
-            fold_trainer = QuantModelTrainer(
-                n_estimators=self.model.n_estimators,
-                max_depth=self.model.max_depth,
-                learning_rate=self.model.learning_rate,
-                subsample=self.model.subsample,
-                colsample_bytree=self.model.colsample_bytree,
-                random_state=self.model.random_state,
-            )
-            fold_trainer.train(train_df, feature_cols=feature_cols, target_col=target_col, weight_col=weight_col)
-
-            test_probs = fold_trainer.predict_proba(test_df, feature_cols=feature_cols)
-            oos_probs[test_idx] = test_probs
+            fold_trainer = QuantModelTrainer()
+            fold_trainer.model = clone(self.model)
+            fold_trainer.train(pl.from_pandas(pdf.iloc[train_idx]), feature_cols=feature_cols, target_col=target_col, weight_col=weight_col)
+            oos_probs[test_idx] = fold_trainer.predict_proba(pl.from_pandas(pdf.iloc[test_idx]), feature_cols=feature_cols)
 
         logger.success("Walk-Forward OOS binary probability predictions completed.")
         return oos_probs

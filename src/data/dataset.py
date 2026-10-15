@@ -3,6 +3,7 @@
 from pathlib import Path
 import pandas as pd
 import polars as pl
+from config.settings import settings
 from src.features.storage import FeatureStorage
 from src.labeling.triple_barrier import TripleBarrierLabeler
 from src.labeling.sample_weights import SampleWeights
@@ -24,7 +25,7 @@ class DatasetBuilder:
         return self.datasets_dir / filename
 
     def build_dataset(
-        self, symbol: str, timeframe: str, pt_sl: list[float] = [1.5, 1.0], num_bars: int = 24
+        self, symbol: str, timeframe: str, pt_sl: list[float] = settings.PT_SL_RATIO, num_bars: int = settings.MAX_HOLD_HOURS
     ) -> pl.DataFrame:
         """Build supervised ML dataset for a given symbol and timeframe.
 
@@ -53,20 +54,10 @@ class DatasetBuilder:
         pdf["timestamp"] = pd.to_datetime(pdf["timestamp"])
         pdf = pdf.set_index("timestamp").sort_index()
 
-        close_idx = pdf.index
-        close_series = pdf["close"]
-
-        # Re-compute volatility and vertical barriers for event concurrency
-        vol = TripleBarrierLabeler.get_daily_volatility(close_series, span=100)
-        t1 = TripleBarrierLabeler.get_vertical_barriers(close_idx, num_bars=num_bars)
-
-        barrier_events = pd.DataFrame(index=close_idx)
-        barrier_events["t1"] = t1
-        barrier_events["trgt"] = vol
-        barrier_events = barrier_events.dropna(subset=["trgt"])
-
-        # Concurrency & Uniqueness
-        num_co = SampleWeights.get_num_co_events(close_idx, barrier_events)
+        # Concurrency & Uniqueness on the full hourly timeline, each event living from entry to its actual exit
+        bar_idx = pd.DatetimeIndex(pd.to_datetime(df_features["timestamp"].to_pandas()))
+        barrier_events = pd.DataFrame({"t1": pd.to_datetime(pdf["t1"])}, index=pdf.index)
+        num_co = SampleWeights.get_num_co_events(bar_idx, barrier_events)
         uniqueness = SampleWeights.get_sample_uniqueness(barrier_events, num_co)
         sample_weights = SampleWeights.get_sample_weights(barrier_events, uniqueness, pdf["target_return"])
 
@@ -81,6 +72,15 @@ class DatasetBuilder:
         result_df = pl.from_pandas(pdf)
         logger.success(f"Successfully built dataset for {symbol} with {len(result_df)} samples.")
         return result_df
+
+    def load_or_build(self, symbol: str, timeframe: str) -> pl.DataFrame:
+        """Load the persisted dataset, building and saving it first when missing."""
+        df = self.load_dataset(symbol, timeframe)
+        if df.is_empty():
+            logger.info(f"Dataset for {symbol} ({timeframe}) not found. Building it...")
+            df = self.build_dataset(symbol, timeframe)
+            self.save_dataset(df, symbol, timeframe)
+        return df
 
     def save_dataset(self, df: pl.DataFrame, symbol: str, timeframe: str) -> Path:
         """Persist training dataset to Apache Parquet format with snappy compression."""

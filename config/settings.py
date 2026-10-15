@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     PT_SL_RATIO: list[float] = [1.5, 1.0]
     MAX_HOLD_HOURS: int = 24
     ATR_PERIOD: int = 14
+    MODEL_FEATURES: list[str] = [
+        "vol_parkinson_pct",
+        "ema_200_dist",
+        "frac_diff_close",
+        "hurst_100",
+        "vol_garman_klass",
+        "vol_ratio_6_24",
+        "vol_parkinson",
+        "rsi_adaptive",
+        "vwap_lower_2_dist",
+        "adx_14",
+    ]
     MODEL_PARAMS: dict = {
         "max_depth": 3,
         "num_leaves": 7,
