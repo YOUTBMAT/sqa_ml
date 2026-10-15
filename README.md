@@ -36,17 +36,22 @@ A arquitetura adota um modelo de duas camadas (Sinal Primário + Filtro de Machi
   - **Take-Profit (TP):** $1.5 \times \text{ATR}$
   - **Stop-Loss (SL):** $1.0 \times \text{ATR}$
   - **Barreira Temporal ($t_1$):** Encerramento compulsório após 24 horas.
-- **Limiar Operacional de Confirmação (Produção):**
-  - O sinal primário para o ativo **ETH/USDT** é executado apenas quando a probabilidade estimada pelo modelo secundário atinge ou supera o limiar calibrado: $P(y=1) \ge 0.62$.
+- **Limiar Operacional de Confirmação (Paper):**
+  - O sinal primário para o ativo **ETH/USDT** é executado apenas quando $P(y=1) \ge 0.62$ (`settings.PROB_THRESHOLD`). Ver seção 5 antes de considerar capital real.
 
 ---
 
-## 5. Tabela de Desempenho Contínuo (Engine Barra a Barra - Threshold 0.62)
-A tabela abaixo consolida o desempenho *Out-Of-Sample* obtido pelo engine contínuo após a calibração de thresholds para **ETH/USDT** (ativo exclusivo em produção):
+## 5. Desempenho Out-Of-Sample (Engine Contínuo Barra a Barra)
+Resultados com probabilidades **somente out-of-sample** (Purged Walk-Forward), simuladas sobre as barras horárias contínuas com as mesmas barreiras do rótulo (SL vence em barra ambígua, gaps preenchem na abertura), custos de 0,07% por lado. Reproduza com `scripts/run_backtest.py --symbol ETH/USDT` e `scripts/calibrate_thresholds.py`.
 
-| Ativo / Par | Threshold ($P$) | Trades (N) | Win Rate (%) | Profit Factor | Sharpe Ratio | Retorno Total (%) | Status |
+| Ativo / Par | OOS ROC AUC | Taxa base (TP primeiro) | Threshold | Trades | Win Rate | Profit Factor | Retorno Total |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **ETH/USDT** | **0.62** | **40** | **55.00%** | **1.81** | **2.16** | **+9.32%** | **PRODUÇÃO (ATIVO)** |
+| ETH/USDT | 0.489 | 40.1% | 0.62 | 24 | 41.7% | 0.73 | -4.24% |
+| BTC/USDT | 0.484 | 41.0% | 0.62 | 13 | 38.5% | 0.85 | -0.82% |
+
+**Status: sem edge comprovado.** O AUC fora da amostra é indistinguível de 0,5 e nenhum threshold entre 0,50 e 0,65 atinge Profit Factor >= 1 no período de calibração. Opere apenas em PAPER até um modelo passar no holdout de `calibrate_thresholds.py`.
+
+> O valor publicado anteriormente (+9,32%, PF 1,81) vinha de rodar o backtest sobre o dataset esparso (apenas linhas com sinal), onde "24 barras" correspondiam a dias de mercado e a máxima/mínima de horas não observadas era ignorada.
 
 ---
 
