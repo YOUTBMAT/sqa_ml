@@ -1,4 +1,4 @@
-"""CLI script for running complete out-of-sample backtest simulations and performance reporting (2-Stage Meta-Labeling)."""
+"""CLI script for running complete continuous hourly backtest simulations and performance reporting (2-Stage Meta-Labeling)."""
 
 import argparse
 import sys
@@ -7,8 +7,9 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from src.data.dataset import DatasetBuilder
+from src.features.storage import FeatureStorage
 from src.models.trainer import QuantModelTrainer
+from src.models.storage import ModelStorage
 from src.labeling.triple_barrier import TripleBarrierLabeler
 from src.backtest.engine import VectorizedBacktester
 from src.backtest.metrics import PerformanceMetrics
@@ -16,8 +17,8 @@ from src.utils.logger import logger
 
 
 def main() -> None:
-    """Parse CLI arguments and execute 2-stage meta-labeling backtest pipeline."""
-    parser = argparse.ArgumentParser(description="SQA-ML 2-Stage Meta-Labeling Backtest CLI")
+    """Parse CLI arguments and execute 2-stage continuous hourly backtest pipeline."""
+    parser = argparse.ArgumentParser(description="SQA-ML Continuous Hourly Backtest CLI")
     parser.add_argument("--symbol", type=str, default="BTC/USDT", help="Asset symbol (e.g., BTC/USDT)")
     parser.add_argument("--timeframe", type=str, default="1h", help="Candle timeframe (e.g., 1h)")
     parser.add_argument("--mode", type=str, choices=["standard", "walk-forward"], default="walk-forward", help="Backtest prediction mode")
@@ -30,26 +31,20 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    logger.info("=== INITIALIZING SQA-ML 2-STAGE BACKTEST CLI ===")
+    logger.info("=== INITIALIZING SQA-ML CONTINUOUS HOURLY BACKTEST CLI ==PS===")
 
-    builder = DatasetBuilder()
-    df_dataset = builder.load_dataset(args.symbol, args.timeframe)
+    feature_storage = FeatureStorage()
+    df_features = feature_storage.load_features(args.symbol, args.timeframe)
 
-    if df_dataset.is_empty():
-        logger.info(f"Dataset for {args.symbol} ({args.timeframe}) not found. Automatically building dataset...")
-        df_dataset = builder.build_dataset(args.symbol, args.timeframe)
-        if not df_dataset.is_empty():
-            builder.save_dataset(df_dataset, args.symbol, args.timeframe)
-
-    if df_dataset.is_empty():
-        logger.error(f"Dataset for {args.symbol} ({args.timeframe}) could not be built or loaded.")
+    if df_features.is_empty():
+        logger.error(f"Features for {args.symbol} ({args.timeframe}) not found. Please run generate_features.py first.")
         sys.exit(1)
 
     exclude_cols = {
         "timestamp", "symbol", "asset_class", "timeframe", "open", "high", "low", "close",
-        "volume", "trades_count", "target_label", "target_return", "barrier_touched", "sample_weight", "primary_signal", "ofi", "t1", "touch_time",
+        "volume", "trades_count", "ofi", "t1", "touch_time",
     }
-    feature_cols = [col for col in df_dataset.columns if col not in exclude_cols]
+    feature_cols = [col for col in df_features.columns if col not in exclude_cols]
     top10_features = [
         "vol_parkinson_pct",
         "ema_200_dist",
@@ -64,27 +59,36 @@ def main() -> None:
     ]
     feature_cols = [col for col in feature_cols if col in top10_features]
 
-    # 1. Compute Primary Signal (EMA200 & ADX14)
-    pdf_dataset = df_dataset.to_pandas()
-    primary_signals = TripleBarrierLabeler.get_primary_signal(pdf_dataset)
+    # 1. Compute Primary Signal for all continuous hourly bars
+    pdf_features = df_features.to_pandas()
+    primary_signals = TripleBarrierLabeler.get_primary_signal(pdf_features)
 
-    # 2. Generate Secondary Meta-Label probabilities P(y=1)
-    trainer = QuantModelTrainer()
-    if args.mode == "walk-forward":
-        logger.info("Generating Out-Of-Sample secondary probabilities via Purged Walk-Forward Cross-Validation...")
-        oos_probs = trainer.cross_val_predict_walk_forward(df_dataset, feature_cols=feature_cols, n_splits=5, pct_embargo=0.01)
-        p_y1 = oos_probs[:, 1]
-    else:
-        logger.info("Training full model for secondary probabilities...")
+    # 2. Load or train model / generate probabilities for all bars
+    storage = ModelStorage()
+    try:
+        model, meta = storage.load_model(args.symbol, args.timeframe)
+        logger.info("Loaded trained model for continuous inference.")
+        # Predict on all feature rows
+        probs = model.predict_proba(df_features, feature_cols=feature_cols)
+        p_y1 = probs[:, 1]
+    except Exception:
+        logger.info("No saved model found. Training fresh model...")
+        trainer = QuantModelTrainer()
+        # Build dataset just for training weights/labels
+        from src.data.dataset import DatasetBuilder
+        builder = DatasetBuilder()
+        df_dataset = builder.load_dataset(args.symbol, args.timeframe)
+        if df_dataset.is_empty():
+            df_dataset = builder.build_dataset(args.symbol, args.timeframe)
         trainer.train(df_dataset, feature_cols=feature_cols)
-        full_probs = trainer.predict_proba(df_dataset, feature_cols=feature_cols)
-        p_y1 = full_probs[:, 1]
+        probs = trainer.predict_proba(df_features, feature_cols=feature_cols)
+        p_y1 = probs[:, 1]
 
     # 3. Two-Stage Filtering: Primary Signal + Secondary Model Confidence P(y=1) >= args.buy_threshold
-    proba_matrix = np.zeros((len(df_dataset), 3))
+    proba_matrix = np.zeros((len(df_features), 3))
     proba_matrix[:, 1] = 1.0
 
-    for i in range(len(df_dataset)):
+    for i in range(len(df_features)):
         sig = primary_signals.iloc[i]
         p = p_y1[i]
         if sig == 1 and p >= args.buy_threshold:
@@ -94,7 +98,7 @@ def main() -> None:
             proba_matrix[i, 0] = 0.80  # Short confirmed
             proba_matrix[i, 1] = 0.20
 
-    # 4. Vectorized Backtest Engine
+    # 4. Continuous Hourly Backtest Engine
     backtester = VectorizedBacktester(
         initial_capital=args.initial_capital,
         fee_rate=args.fee_rate,
@@ -102,16 +106,16 @@ def main() -> None:
         buy_threshold=args.buy_threshold,
         sell_threshold=args.sell_threshold,
     )
-    results_df = backtester.run(df_dataset, proba_matrix)
+    results_df = backtester.run(df_features, proba_matrix)
 
     # 5. Performance Metrics Calculation
     metrics = PerformanceMetrics.calculate_metrics(results_df, initial_capital=args.initial_capital)
 
     # 6. Display Results in Terminal
-    print("\n" + "=" * 50)
-    print(f"       SQA-ML 2-STAGE META-LABELING REPORT     ")
-    print(f"       Asset: {args.symbol} | Timeframe: {args.timeframe} | Mode: {args.mode}       ")
-    print("=" * 50)
+    print("\n" + "=" * 55)
+    print(f"       SQA-ML CONTINUOUS HOURLY BACKTEST REPORT     ")
+    print(f"       Asset: {args.symbol} | Timeframe: {args.timeframe}       ")
+    print("=" * 55)
     for k, v in metrics.items():
         if "pct" in k or "return" in k or "drawdown" in k:
             print(f" {k.replace('_', ' ').title():<25} : {v:>10.2f}%")
@@ -119,18 +123,18 @@ def main() -> None:
             print(f" {k.replace('_', ' ').title():<25} : {v:>10.4f}")
         else:
             print(f" {k.replace('_', ' ').title():<25} : {v:>10.2f}")
-    print("=" * 50 + "\n")
+    print("=" * 55 + "\n")
 
     # 7. Export results if requested
     if args.export:
         results_dir = Path("data/backtest_results")
         results_dir.mkdir(parents=True, exist_ok=True)
         sanitized_symbol = args.symbol.replace("/", "_").replace("-", "_").lower()
-        export_path = results_dir / f"{sanitized_symbol}_{args.timeframe}_metalabel_{args.mode}.parquet"
+        export_path = results_dir / f"{sanitized_symbol}_{args.timeframe}_continuous_backtest.parquet"
         results_df.reset_index().to_parquet(export_path)
-        logger.success(f"2-Stage backtest results exported successfully to {export_path}")
+        logger.success(f"Continuous backtest results exported successfully to {export_path}")
 
-    logger.info("=== 2-STAGE BACKTEST PIPELINE COMPLETE ===")
+    logger.info("=== CONTINUOUS HOURLY BACKTEST PIPELINE COMPLETE ===")
 
 
 if __name__ == "__main__":

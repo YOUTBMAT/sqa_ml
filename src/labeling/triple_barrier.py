@@ -1,8 +1,9 @@
-"""Meta-Labeling and Triple Barrier Method labeling module (Marcos López de Prado)."""
+"""Meta-Labeling and Triple Barrier Method labeling module (Marcos López de Prado) unified with ATR and settings."""
 
 import pandas as pd
 import numpy as np
 import polars as pl
+from config.settings import settings
 from src.utils.logger import logger
 
 
@@ -18,7 +19,18 @@ class TripleBarrierLabeler:
         return vol.fillna(vol.mean() if not vol.dropna().empty else 0.01)
 
     @staticmethod
-    def get_vertical_barriers(timestamps: pd.Series, num_bars: int = 24) -> pd.Series:
+    def get_atr_volatility(close: pd.Series, high: pd.Series, low: pd.Series, period: int = settings.ATR_PERIOD) -> pd.Series:
+        """Compute dynamic ATR volatility."""
+        logger.info(f"Computing ATR volatility with period={period}...")
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.ewm(span=period).mean().fillna(close * 0.01)
+        return atr
+
+    @staticmethod
+    def get_vertical_barriers(timestamps: pd.Series, num_bars: int = settings.MAX_HOLD_HOURS) -> pd.Series:
         """Define vertical time barrier timestamps at a fixed number of bars in the future."""
         logger.info(f"Defining vertical barriers {num_bars} bars ahead...")
         t1 = pd.Series(timestamps).shift(-num_bars).values
@@ -69,18 +81,14 @@ class TripleBarrierLabeler:
 
     @staticmethod
     def apply_meta_triple_barrier(
-        events: pd.DataFrame, close: pd.Series, primary_signals: pd.Series, pt_sl: list[float]
+        events: pd.DataFrame, close: pd.Series, high: pd.Series, low: pd.Series, primary_signals: pd.Series, pt_sl: list[float]
     ) -> pd.DataFrame:
-        """Apply secondary meta-labeling based on primary signals.
-
-        pt_sl: [pt_mult, sl_mult] e.g. [2.0, 1.0]
-        y = 1 if Take-Profit reached first; y = 0 if Stop-Loss or t1 reached first.
-        """
-        logger.info("Applying meta-labeling triple barrier evaluation...")
+        """Apply secondary meta-labeling based on primary signals using ATR-based TP and SL."""
+        logger.info("Applying meta-labeling triple barrier evaluation with ATR barriers...")
         out = pd.DataFrame(index=events.index)
         
-        pt_mult = pt_sl[0] if len(pt_sl) > 0 else 2.0
-        sl_mult = pt_sl[1] if len(pt_sl) > 1 else 1.0
+        pt_mult = pt_sl[0] if len(pt_sl) > 0 else settings.PT_SL_RATIO[0]
+        sl_mult = pt_sl[1] if len(pt_sl) > 1 else settings.PT_SL_RATIO[1]
 
         out["t1"] = events["t1"]
         out["trgt"] = events["trgt"]
@@ -117,31 +125,39 @@ class TripleBarrierLabeler:
                 continue
 
             price_start = close.loc[loc]
-            target = events.loc[loc, "trgt"]
+            target_atr = events.loc[loc, "trgt"]
 
             if sig == 1:
-                tp_limit = price_start * (1.0 + pt_mult * target)
-                sl_limit = price_start * (1.0 - sl_mult * target)
+                tp_limit = price_start + (pt_mult * target_atr)
+                sl_limit = price_start - (sl_mult * target_atr)
             else:
-                tp_limit = price_start * (1.0 - pt_mult * target)
-                sl_limit = price_start * (1.0 + sl_mult * target)
+                tp_limit = price_start - (pt_mult * target_atr)
+                sl_limit = price_start + (sl_mult * target_atr)
 
-            future_slice = close.loc[loc:t1_dt]
-            if future_slice.empty or len(future_slice) <= 1:
+            future_slice_close = close.loc[loc:t1_dt]
+            future_slice_high = high.loc[loc:t1_dt] if high is not None else future_slice_close
+            future_slice_low = low.loc[loc:t1_dt] if low is not None else future_slice_close
+
+            if future_slice_close.empty or len(future_slice_close) <= 1:
                 touch_times.append(t1_dt)
                 meta_labels.append(0)
                 returns.append(0.0)
                 barrier_types.append("t1")
                 continue
 
-            future_prices = future_slice.iloc[1:]
+            future_highs = future_slice_high.iloc[1:]
+            future_lows = future_slice_low.iloc[1:]
+            future_closes = future_slice_close.iloc[1:]
+
+            t_tp = None
+            t_sl = None
 
             if sig == 1:
-                touched_tp = future_prices[future_prices >= tp_limit]
-                touched_sl = future_prices[future_prices <= sl_limit]
+                touched_tp = future_highs[future_highs >= tp_limit]
+                touched_sl = future_lows[future_lows <= sl_limit]
             else:
-                touched_tp = future_prices[future_prices <= tp_limit]
-                touched_sl = future_prices[future_prices >= sl_limit]
+                touched_tp = future_lows[future_lows <= tp_limit]
+                touched_sl = future_highs[future_highs >= sl_limit]
 
             t_tp = touched_tp.index[0] if not touched_tp.empty else None
             t_sl = touched_sl.index[0] if not touched_sl.empty else None
@@ -168,7 +184,7 @@ class TripleBarrierLabeler:
                 barrier_type = "sl"
                 meta_label = 0
 
-            exit_price = close.loc[first_touch_time] if first_touch_time in close.index else future_prices.iloc[-1]
+            exit_price = close.loc[first_touch_time] if first_touch_time in close.index else future_closes.iloc[-1]
             ret = (exit_price - price_start) / price_start * sig
 
             touch_times.append(first_touch_time)
@@ -186,7 +202,7 @@ class TripleBarrierLabeler:
 
     @classmethod
     def get_labels(
-        cls, df: pl.DataFrame, pt_sl: list[float] = [1.5, 1.0], num_bars: int = 24
+        cls, df: pl.DataFrame, pt_sl: list[float] = settings.PT_SL_RATIO, num_bars: int = settings.MAX_HOLD_HOURS
     ) -> pl.DataFrame:
         """Main interface to compute Meta-Labels for a Polars feature DataFrame."""
         logger.info("Starting Meta-Labeling pipeline...")
@@ -201,19 +217,21 @@ class TripleBarrierLabeler:
         pdf = pdf.set_index("timestamp").sort_index()
 
         close = pdf["close"]
+        high = pdf["high"] if "high" in pdf.columns else close
+        low = pdf["low"] if "low" in pdf.columns else close
 
-        vol = cls.get_daily_volatility(close, span=100)
+        atr = cls.get_atr_volatility(close, high, low, period=settings.ATR_PERIOD)
         t1 = cls.get_vertical_barriers(pdf.index, num_bars=num_bars)
         primary_signals = cls.get_primary_signal(pdf)
 
         events = pd.DataFrame(index=pdf.index)
         events["t1"] = t1
-        events["trgt"] = vol
+        events["trgt"] = atr
 
         events = events.dropna(subset=["trgt"])
         events = events[events["trgt"] > 0]
 
-        labels_pdf = cls.apply_meta_triple_barrier(events, close, primary_signals, pt_sl=pt_sl)
+        labels_pdf = cls.apply_meta_triple_barrier(events, close, high, low, primary_signals, pt_sl=pt_sl)
 
         pdf["primary_signal"] = labels_pdf["primary_signal"]
         pdf["target_label"] = labels_pdf["target_label"]
@@ -223,7 +241,6 @@ class TripleBarrierLabeler:
 
         pdf = pdf.reset_index()
         result_df = pl.from_pandas(pdf)
-        # Filter to active primary signals only
         result_df = result_df.filter(pl.col("primary_signal") != 0)
 
         logger.success(f"Meta-labeling complete. Produced {len(result_df)} active signal records.")

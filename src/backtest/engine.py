@@ -1,21 +1,22 @@
-"""Vectorized backtesting engine simulating strategy returns, transaction costs, and slippage."""
+"""Continuous hourly backtesting engine simulating strategy returns, transaction costs, slippage, and Triple Barrier exits (1.5x ATR TP / 1.0x ATR SL / 24h limit)."""
 
 import numpy as np
 import pandas as pd
 import polars as pl
+from config.settings import settings
 from src.utils.logger import logger
 
 
 class VectorizedBacktester:
-    """Vectorized backtester for evaluating quantitative trading strategies."""
+    """Continuous hourly backtester for evaluating quantitative trading strategies over continuous price series."""
 
     def __init__(
         self,
         initial_capital: float = 10000.0,
         fee_rate: float = 0.0005,
         slippage: float = 0.0002,
-        buy_threshold: float = 0.55,
-        sell_threshold: float = 0.45,
+        buy_threshold: float = 0.75,
+        sell_threshold: float = 0.25,
     ) -> None:
         self.initial_capital = initial_capital
         self.fee_rate = fee_rate
@@ -24,8 +25,8 @@ class VectorizedBacktester:
         self.sell_threshold = sell_threshold
 
     def run(self, df: pl.DataFrame, proba_predictions: np.ndarray) -> pd.DataFrame:
-        """Run backtest simulation with Triple Barrier exits (SL = 1*ATR, TP = 2*ATR, t1 = 24h)."""
-        logger.info("Running backtest simulation with Triple Barrier exits...")
+        """Run continuous hourly simulation over all bars with 1.5x ATR TP, 1.0x ATR SL, and 24h time barrier."""
+        logger.info("Running continuous hourly backtest simulation over price series...")
         
         cols = [c for c in ["timestamp", "open", "high", "low", "close"] if c in df.columns]
         pdf = df.select(cols).to_pandas()
@@ -38,13 +39,13 @@ class VectorizedBacktester:
         else:
             raise ValueError("Expected probability predictions of shape (N, 3).")
 
-        # Compute ATR if high and low are available
+        # Compute ATR-14
         if "high" in pdf.columns and "low" in pdf.columns:
             tr1 = pdf["high"] - pdf["low"]
             tr2 = (pdf["high"] - pdf["close"].shift(1)).abs()
             tr3 = (pdf["low"] - pdf["close"].shift(1)).abs()
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            atr = tr.ewm(span=14).mean().fillna(pdf["close"] * 0.01)
+            atr = tr.ewm(span=settings.ATR_PERIOD).mean().fillna(pdf["close"] * 0.01)
         else:
             atr = pdf["close"] * 0.01
 
@@ -52,77 +53,93 @@ class VectorizedBacktester:
         positions = np.zeros(n)
         strategy_returns = np.zeros(n)
         transaction_costs = np.zeros(n)
+        trade_durations = []
 
         cost_rate = self.fee_rate + self.slippage
+        active_position = None
 
-        i = 0
-        while i < n - 1:
-            is_long = prob_long[i] > self.buy_threshold
-            is_short = prob_short[i] > self.sell_threshold
+        for i in range(n):
+            current_price = pdf["close"].iloc[i]
+            bar_high = pdf["high"].iloc[i] if "high" in pdf.columns else current_price
+            bar_low = pdf["low"].iloc[i] if "low" in pdf.columns else current_price
+            current_atr = atr.iloc[i]
+            if pd.isna(current_atr) or current_atr <= 0:
+                current_atr = current_price * 0.01
 
-            if is_long or is_short:
-                side = 1.0 if is_long else -1.0
-                entry_idx = i + 1
-                if entry_idx >= n:
-                    break
-                
-                entry_price = pdf["close"].iloc[entry_idx]
-                current_atr = atr.iloc[entry_idx]
-                if pd.isna(current_atr) or current_atr <= 0:
-                    current_atr = entry_price * 0.01
+            # 1. Manage active position bar-by-bar
+            if active_position is not None:
+                side = active_position["side"]
+                entry_price = active_position["entry_price"]
+                tp_price = active_position["tp_price"]
+                sl_price = active_position["sl_price"]
+                entry_idx = active_position["entry_idx"]
+                holding_hours = i - entry_idx
 
-                tp_price = entry_price + (1.5 * current_atr * side)
-                sl_price = entry_price - (1.0 * current_atr * side)
+                hit = False
+                exit_price = current_price
 
-                exit_idx = entry_idx
-                exit_price = entry_price
+                if side == 1:
+                    if bar_high >= tp_price:
+                        hit = True
+                        exit_price = tp_price
+                    elif bar_low <= sl_price:
+                        hit = True
+                        exit_price = sl_price
+                else: # short
+                    if bar_low <= tp_price:
+                        hit = True
+                        exit_price = tp_price
+                    elif bar_high >= sl_price:
+                        hit = True
+                        exit_price = sl_price
 
-                for j in range(entry_idx, min(entry_idx + 24, n)):
-                    bar_high = pdf["high"].iloc[j] if "high" in pdf.columns else pdf["close"].iloc[j]
-                    bar_low = pdf["low"].iloc[j] if "low" in pdf.columns else pdf["close"].iloc[j]
-                    bar_close = pdf["close"].iloc[j]
+                if not hit and holding_hours >= settings.MAX_HOLD_HOURS:
+                    hit = True
+                    exit_price = current_price
 
-                    if side == 1:  # Long
-                        if bar_high >= tp_price:
-                            exit_idx = j
-                            exit_price = tp_price
-                            break
-                        elif bar_low <= sl_price:
-                            exit_idx = j
-                            exit_price = sl_price
-                            break
-                    else:  # Short
-                        if bar_low <= tp_price:
-                            exit_idx = j
-                            exit_price = tp_price
-                            break
-                        elif bar_high >= sl_price:
-                            exit_idx = j
-                            exit_price = sl_price
-                            break
-                    
-                    if j == entry_idx + 23 or j == n - 1:
-                        exit_idx = j
-                        exit_price = bar_close
+                if hit:
+                    raw_ret = (exit_price - entry_price) / entry_price * side
+                    net_ret = raw_ret - (2.0 * cost_rate)
+                    strategy_returns[i] = net_ret
+                    transaction_costs[i] = cost_rate
+                    trade_durations.append(holding_hours)
+                    active_position = None
+                else:
+                    positions[i] = side
+                    continue
 
-                positions[entry_idx:exit_idx+1] = side
+            # 2. Check for new entry signal if no active position
+            if active_position is None and i < n - 1:
+                is_long = prob_long[i] > self.buy_threshold
+                is_short = prob_short[i] > self.sell_threshold
 
-                raw_ret = (exit_price - entry_price) / entry_price * side
-                net_ret = raw_ret - (2.0 * cost_rate)
+                if is_long or is_short:
+                    side = 1.0 if is_long else -1.0
+                    entry_price = pdf["close"].iloc[i]
+                    pt_mult, sl_mult = settings.PT_SL_RATIO
 
-                strategy_returns[exit_idx] = net_ret
-                transaction_costs[entry_idx] = cost_rate
-                transaction_costs[exit_idx] = cost_rate
+                    if side == 1:
+                        tp_price = entry_price + (pt_mult * current_atr)
+                        sl_price = entry_price - (sl_mult * current_atr)
+                    else:
+                        tp_price = entry_price - (pt_mult * current_atr)
+                        sl_price = entry_price + (sl_mult * current_atr)
 
-                i = exit_idx
-            else:
-                positions[i] = 0.0
-                i += 1
+                    active_position = {
+                        "side": side,
+                        "entry_price": entry_price,
+                        "tp_price": tp_price,
+                        "sl_price": sl_price,
+                        "entry_idx": i,
+                    }
+                    positions[i] = side
+                    transaction_costs[i] = cost_rate
 
         pdf["position"] = positions
         pdf["net_strategy_returns"] = strategy_returns
         pdf["transaction_costs"] = transaction_costs
         pdf["equity"] = self.initial_capital * (1.0 + pdf["net_strategy_returns"]).cumprod()
 
-        logger.success("Backtest simulation with Triple Barrier exits completed.")
+        median_duration = float(np.median(trade_durations)) if trade_durations else 0.0
+        logger.success(f"Continuous hourly backtest simulation completed. Total trades: {len(trade_durations)}, Median duration: {median_duration:.1f}h")
         return pdf

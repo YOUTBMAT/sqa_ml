@@ -2,7 +2,8 @@
 
 import json
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from config.settings import settings
 from src.utils.logger import logger
 
 
@@ -259,6 +260,17 @@ class PaperTrader:
                 elif tp is not None and price <= tp:
                     hit = True
                     exit_reason = "take_profit"
+
+            # Check 24h time barrier
+            if not hit:
+                entry_time = pos.get("timestamp")
+                if entry_time is not None:
+                    if entry_time.tzinfo is None:
+                        entry_time = entry_time.replace(tzinfo=timezone.utc)
+                    now = datetime.now(timezone.utc)
+                    if now >= entry_time + timedelta(hours=settings.MAX_HOLD_HOURS):
+                        hit = True
+                        exit_reason = "TIME_BARRIER_24H"
 
             if hit:
                 logger.warning(f"[PAPER] Position {symbol} hit {exit_reason} at price {price}.")

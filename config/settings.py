@@ -24,10 +24,20 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
 
-    # Production Trading Configuration
+    # Production Trading & Modeling Configuration
     SYMBOLS: list[str] = ["BTC/USDT", "ETH/USDT"]
     PROB_THRESHOLD: float = 0.65
     PT_SL_RATIO: list[float] = [1.5, 1.0]
+    MAX_HOLD_HOURS: int = 24
+    ATR_PERIOD: int = 14
+    MODEL_PARAMS: dict = {
+        "max_depth": 3,
+        "num_leaves": 7,
+        "learning_rate": 0.03,
+        "min_child_samples": 50,
+        "colsample_bytree": 0.8,
+        "subsample": 0.8,
+    }
 
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(__file__), ".env"),

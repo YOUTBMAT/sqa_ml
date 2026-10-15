@@ -5,6 +5,7 @@ import pandas as pd
 import polars as pl
 from lightgbm import LGBMClassifier
 from sklearn.metrics import log_loss, accuracy_score, roc_auc_score
+from config.settings import settings
 from src.utils.logger import logger
 
 
@@ -14,26 +15,35 @@ class QuantModelTrainer:
     def __init__(
         self,
         n_estimators: int = 100,
-        max_depth: int = 3,
-        num_leaves: int = 7,
-        min_child_samples: int = 50,
-        learning_rate: float = 0.03,
-        subsample: float = 0.8,
-        colsample_bytree: float = 0.8,
+        max_depth: int | None = None,
+        num_leaves: int | None = None,
+        min_child_samples: int | None = None,
+        learning_rate: float | None = None,
+        subsample: float | None = None,
+        colsample_bytree: float | None = None,
         random_state: int = 42,
     ) -> None:
+        params = settings.MODEL_PARAMS.copy()
+        if max_depth is not None:
+            params["max_depth"] = max_depth
+        if num_leaves is not None:
+            params["num_leaves"] = num_leaves
+        if min_child_samples is not None:
+            params["min_child_samples"] = min_child_samples
+        if learning_rate is not None:
+            params["learning_rate"] = learning_rate
+        if subsample is not None:
+            params["subsample"] = subsample
+        if colsample_bytree is not None:
+            params["colsample_bytree"] = colsample_bytree
+
         self.model = LGBMClassifier(
             n_estimators=n_estimators,
-            max_depth=max_depth,
-            num_leaves=num_leaves,
-            min_child_samples=min_child_samples,
-            learning_rate=learning_rate,
-            subsample=subsample,
-            colsample_bytree=colsample_bytree,
             random_state=random_state,
             objective="binary",
             metric="binary_logloss",
             verbose=-1,
+            **params,
         )
         self.feature_cols: list[str] = []
 
