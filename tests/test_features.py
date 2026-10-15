@@ -29,7 +29,7 @@ def test_fractional_differentiation_stationarity() -> None:
 
 def test_no_lookahead_bias() -> None:
     """Test 2: Rigorous temporal causality (no lookahead bias)."""
-    n = 100
+    n = 250
     base_time = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     timestamps = [base_time + timedelta(hours=i) for i in range(n)]
 

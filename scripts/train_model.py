@@ -156,6 +156,7 @@ def main() -> None:
         "timeframe": args.timeframe,
         "feature_cols": feature_cols,
         "metrics": metrics,
+        "oos_roc_auc": float(oos_auc),
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "n_samples": len(df_dataset),
     }

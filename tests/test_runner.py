@@ -29,7 +29,7 @@ async def test_bot_runner_single_iteration(
     mock_notifier_cls.return_value = mock_notifier
 
     # Mock Primary Signal to return 1 (Long)
-    mock_primary_signal.return_value = pd.Series([1] * 30)
+    mock_primary_signal.return_value = pd.Series([1] * 250)
 
     # Mock ModelStorage & Model (binary classifier returns [p_0, p_1])
     mock_model = MagicMock()
@@ -39,7 +39,7 @@ async def test_bot_runner_single_iteration(
     mock_storage_cls.return_value = mock_storage
 
     # Mock Collector OHLCV candles
-    n = 30
+    n = 250
     base_time = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     timestamps = [base_time + timedelta(hours=i) for i in range(n)]
     df_mock = pl.DataFrame(
