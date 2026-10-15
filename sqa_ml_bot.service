@@ -3,11 +3,12 @@ Description=SQA-ML Trading Bot Service (Paper Mode)
 After=network.target docker.service
 
 [Service]
+# Symbols and probability threshold come from config/settings.py (SYMBOLS, PROB_THRESHOLD)
 Type=simple
 WorkingDirectory=/home/youtbmat/Documentos/Coding Projects/sqa_ml
 Environment=PYTHONPATH=src:config:.
 EnvironmentFile=/home/youtbmat/Documentos/Coding Projects/sqa_ml/config/.env
-ExecStart="/home/youtbmat/Documentos/Coding Projects/sqa_ml/venv/bin/python" scripts/run_live_bot.py --symbols BTC/USDT ETH/USDT --timeframe 1h --mode PAPER --poll-interval 60 --buy-threshold 0.65
+ExecStart="/home/youtbmat/Documentos/Coding Projects/sqa_ml/venv/bin/python" scripts/run_live_bot.py --timeframe 1h --mode PAPER --poll-interval 60
 Restart=always
 RestartSec=10
 

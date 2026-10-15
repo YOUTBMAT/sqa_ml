@@ -14,7 +14,7 @@ config/.env
 *.key
 
 # Dados e Histórico do Paper Trading (Estado de Conta)
-data/paper/paper_portfolio.json
+data/paper/
 data/raw/
 data/datasets/*.parquet
 data/backtest_results/*.parquet
@@ -25,6 +25,7 @@ models/saved/*.pkl
 
 # Logs e Arquivos de Sistema
 *.log
+data/bot_error_logs.txt
 logs/
 .idea/
 .vscode/
