@@ -75,6 +75,25 @@ def test_mark_to_market_equity_long_and_short(tmp_path) -> None:
     assert PaperTrader(load_saved_state=True, state_dir=str(tmp_path)).peak_equity == pytest.approx(10200.0)
 
 
+def test_stop_loss_gap_slippage(tmp_path) -> None:
+    """Simulates a LONG position with Stop-Loss at $3000 where the next bar opens with a gap at $2900 (below stop).
+    Validates that the position exits at the gap market open price ($2900) rather than the idealized stop price ($3000).
+    """
+    trader = PaperTrader(initial_balance=10000.0, fee_rate=0.0, slippage_rate=0.0, load_saved_state=False, state_dir=str(tmp_path))
+    trader.execute_paper_order(
+        "BTC/USDT", "buy", 1.0, 3100.0, stop_loss=3000.0, take_profit=3500.0,
+        entry_bar_ts=T0, expires_at=T0 + timedelta(hours=24),
+    )
+    # Bar 1 opens with gap at 2900 (below stop_loss=3000)
+    bar_gap = {"timestamp": T0 + timedelta(hours=1), "open": 2900.0, "high": 2950.0, "low": 2850.0, "close": 2900.0}
+    events = trader.update_positions({"BTC/USDT": [bar_gap]})
+
+    assert len(events) == 1
+    assert events[0]["exit_reason"] == "stop_loss"
+    assert events[0]["execution_price"] == pytest.approx(2900.0)
+    assert not trader.has_open_position("BTC/USDT")
+
+
 @pytest.mark.asyncio
 async def test_execution_engine_risk_integration(tmp_path) -> None:
     """Test ExecutionEngine integrates with RiskManager to block orders when circuit breaker triggers."""

@@ -21,10 +21,9 @@ def test_fractional_differentiation_stationarity() -> None:
 
     assert len(valid_series) > 50, "Too few valid observations after fractional differentiation."
 
-    adf_result = adfuller(valid_series, autolag="AIC")
-    p_value = adf_result[1]
+    _, p_value, is_stationary = StationarityTransformer.test_stationarity(frac_diff_series, autolag="AIC")
 
-    assert p_value < 0.05, f"Fractional differentiated series is not stationary (p-value: {p_value})"
+    assert is_stationary, f"Fractional differentiated series is not stationary (p-value: {p_value})"
 
 
 def test_no_lookahead_bias() -> None:

@@ -2,24 +2,24 @@
     "symbol": "ETH/USDT",
     "timeframe": "1h",
     "feature_cols": [
-        "frac_diff_close",
-        "vol_parkinson",
-        "vol_garman_klass",
         "vol_parkinson_pct",
-        "vwap_lower_2_dist",
-        "adx_14",
         "ema_200_dist",
+        "frac_diff_close",
         "hurst_100",
+        "vol_garman_klass",
+        "vol_ratio_6_24",
+        "vol_parkinson",
         "rsi_adaptive",
-        "vol_ratio_6_24"
+        "vwap_lower_2_dist",
+        "adx_14"
     ],
-    "metrics": {
-        "accuracy": 0.7614061331338818,
-        "log_loss": 0.5428742003702437,
-        "roc_auc": 0.8415595903165736,
+    "in_sample_metrics": {
+        "accuracy": 0.6918474195961107,
+        "log_loss": 0.6040014339078207,
+        "roc_auc": 0.7701117318435754,
         "train_samples": 1337
     },
-    "oos_roc_auc": 0.5088697970564562,
-    "trained_at": "2026-10-15T20:18:22.739420+00:00",
+    "oos_roc_auc": 0.4927273772565252,
+    "trained_at": "2026-10-16T11:05:49.088030+00:00",
     "n_samples": 1338
 }

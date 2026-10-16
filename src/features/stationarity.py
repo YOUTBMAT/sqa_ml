@@ -94,3 +94,14 @@ class StationarityTransformer:
         ).with_columns(
             ((pl.col(value_col) - pl.col(mean_col)) / pl.col(std_col)).alias(output_col)
         ).drop([mean_col, std_col])
+
+    @staticmethod
+    def test_stationarity(series: np.ndarray, autolag: str = "AIC") -> tuple[float, float, bool]:
+        """Perform Augmented Dickey-Fuller test with result_object=True to silence warnings."""
+        from statsmodels.tsa.stattools import adfuller
+        valid_series = series[~np.isnan(series)]
+        if len(valid_series) < 10:
+            return 1.0, 0.0, False
+        res = adfuller(valid_series, autolag=autolag, result_object=True)
+        p_value = res.pvalue
+        return float(res.statistic), float(p_value), bool(p_value < 0.05)
