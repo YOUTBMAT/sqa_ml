@@ -51,10 +51,10 @@ async def test_bot_runner_single_iteration(
             "symbol": ["BTC/USDT"] * n,
             "asset_class": ["CRYPTO"] * n,
             "timeframe": ["1h"] * n,
-            "open": [100.0] * n,
-            "high": [105.0] * n,
-            "low": [95.0] * n,
-            "close": [102.0] * n,
+            "open": [100.0 + i * 0.01 for i in range(n)],
+            "high": [105.0 + i * 0.01 for i in range(n)],
+            "low": [95.0 + i * 0.01 for i in range(n)],
+            "close": [102.0 + i * 0.01 for i in range(n)],
             "volume": [1000.0] * n,
             "trades_count": [10] * n,
         }
@@ -98,8 +98,9 @@ async def test_bot_runner_single_iteration(
     mock_engine.place_order.assert_awaited()
     kwargs = mock_engine.place_order.await_args.kwargs
     # Same barriers as labels/backtest: ATR-14 (true range is 10 on every mock bar), TP 1.5x, SL 1.0x.
-    assert kwargs["stop_loss"] == pytest.approx(102.0 - 10.0)
-    assert kwargs["take_profit"] == pytest.approx(102.0 + 15.0)
+    current_price = 102.0 + (n - 1) * 0.01
+    assert kwargs["stop_loss"] == pytest.approx(current_price - 10.0)
+    assert kwargs["take_profit"] == pytest.approx(current_price + 15.0)
     assert kwargs["entry_bar_ts"] == timestamps[-1]
     assert kwargs["expires_at"] == timestamps[-1] + timedelta(hours=24)
     # Circuit breaker gets real mark-to-market numbers, not hardcoded defaults.

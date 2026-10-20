@@ -48,6 +48,11 @@ Antes de abrir uma nova posição, o runner compara as features recentes (`vol_p
 | `0.10–0.25` | Alerta | Monitorar |
 | `> 0.25` | Desvio severo | Pausar novas entradas |
 
+### Fatores Alpha adicionais
+O pipeline inclui 14 fatores adicionais: `roc_3`, `roc_6`, `roc_12`, `roc_24`, `tsi_25_13`, `atr_ratio_14`, `keltner_upper_dist`, `keltner_lower_dist`, `bb_width_z_30`, `normalized_volume_trend_24`, `obv_momentum_24`, `volume_weighted_price_deviation_24`, `return_skew_30` e `return_kurtosis_30`. Features são limitadas em faixas defensivas quando aplicável e seus valores de warmup nulos/não finitos são removidos.
+
+No rebuild de ETH/USDT, o DataFrame contém **32 features derivadas** e o modelo utiliza 24 colunas (as 10 anteriores mais os 14 fatores novos). O ROC AUC walk-forward OOS foi **0,5105**. A calibração teve 0,50 como único candidato que atingiu PF >= 1 e 20+ trades na janela de calibração, mas falhou no holdout (PF 0,57); portanto, **não há threshold recomendado e o modelo não deve ser operado**.
+
 ---
 
 ## 5. Desempenho Out-Of-Sample (Engine Contínuo Barra a Barra)

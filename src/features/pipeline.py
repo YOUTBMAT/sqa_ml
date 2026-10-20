@@ -70,6 +70,33 @@ class FeaturePipeline:
 
         # 7. Technical: Stationary Alpha Features
         df = QuantitativeFeatures.stationary_alpha_features(df)
+        df = QuantitativeFeatures.momentum_features(df)
+        df = QuantitativeFeatures.volatility_and_band_features(df)
+        df = QuantitativeFeatures.volume_flow_features(df, window=24)
+        df = QuantitativeFeatures.return_moment_features(df, return_col="log_return", window=30)
+
+        new_feature_cols = [
+            *(f"roc_{period}" for period in (3, 6, 12, 24)),
+            "tsi_25_13",
+            "atr_ratio_14",
+            "keltner_upper_dist",
+            "keltner_lower_dist",
+            "bb_width_z_30",
+            "normalized_volume_trend_24",
+            "obv_momentum_24",
+            "volume_weighted_price_deviation_24",
+            "return_skew_30",
+            "return_kurtosis_30",
+        ]
+        df = df.with_columns(
+            [
+                pl.when(pl.col(col).is_finite())
+                .then(pl.col(col))
+                .otherwise(None)
+                .alias(col)
+                for col in new_feature_cols
+            ]
+        )
 
         # Log null counts per column before drop_nulls
         null_counts = {col: df[col].null_count() for col in df.columns}
@@ -96,11 +123,12 @@ class FeaturePipeline:
             "vol_ratio_6_24",
             "volume_momentum_24",
             "volume_price_trend",
+            *new_feature_cols,
         ]
         valid_subset = [col for col in feature_subset if col in df.columns]
 
         initial_len = len(df)
-        df = df.drop_nulls(subset=valid_subset)
+        df = df.drop_nulls(subset=valid_subset).drop_nans(subset=valid_subset)
         dropped_len = initial_len - len(df)
 
         logger.success(

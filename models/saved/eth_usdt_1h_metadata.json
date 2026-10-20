@@ -11,15 +11,29 @@
         "vol_parkinson",
         "rsi_adaptive",
         "vwap_lower_2_dist",
-        "adx_14"
+        "adx_14",
+        "roc_3",
+        "roc_6",
+        "roc_12",
+        "roc_24",
+        "tsi_25_13",
+        "atr_ratio_14",
+        "keltner_upper_dist",
+        "keltner_lower_dist",
+        "bb_width_z_30",
+        "normalized_volume_trend_24",
+        "obv_momentum_24",
+        "volume_weighted_price_deviation_24",
+        "return_skew_30",
+        "return_kurtosis_30"
     ],
     "in_sample_metrics": {
-        "accuracy": 0.6918474195961107,
-        "log_loss": 0.6040014339078207,
-        "roc_auc": 0.7701117318435754,
-        "train_samples": 1337
+        "accuracy": 0.7373584905660377,
+        "log_loss": 0.5929693321574777,
+        "roc_auc": 0.8088104307616504,
+        "train_samples": 1325
     },
-    "oos_roc_auc": 0.4927273772565252,
-    "trained_at": "2026-10-16T11:05:49.088030+00:00",
-    "n_samples": 1338
+    "oos_roc_auc": 0.5105461503629805,
+    "trained_at": "2026-10-20T20:45:49.529739+00:00",
+    "n_samples": 1325
 }

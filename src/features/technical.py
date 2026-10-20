@@ -185,3 +185,121 @@ class QuantitativeFeatures:
                 vpt.alias("volume_price_trend"),
             ]
         )
+
+    @staticmethod
+    def momentum_features(df: pl.DataFrame) -> pl.DataFrame:
+        """Add multi-horizon rate of change and bounded True Strength Index."""
+        close = pl.col("close").cast(pl.Float64)
+        momentum = close - close.shift(1)
+        smooth_momentum = momentum.ewm_mean(span=25).ewm_mean(span=13)
+        smooth_abs_momentum = momentum.abs().ewm_mean(span=25).ewm_mean(span=13)
+        expressions = [
+            ((close / close.shift(period) - 1.0).clip(-10.0, 10.0)).alias(f"roc_{period}")
+            for period in (3, 6, 12, 24)
+        ]
+        expressions.append(
+            (100.0 * smooth_momentum / (smooth_abs_momentum + 1e-8))
+            .clip(-100.0, 100.0)
+            .alias("tsi_25_13")
+        )
+        return df.with_columns(expressions)
+
+    @staticmethod
+    def volatility_and_band_features(df: pl.DataFrame) -> pl.DataFrame:
+        """Add ATR ratio, Keltner channel distances and Bollinger width z-score."""
+        high = pl.col("high").cast(pl.Float64)
+        low = pl.col("low").cast(pl.Float64)
+        close = pl.col("close").cast(pl.Float64)
+        previous_close = close.shift(1)
+        true_range = pl.max_horizontal(
+            [
+                high - low,
+                (high - previous_close).abs(),
+                (low - previous_close).abs(),
+            ]
+        )
+        atr_14 = true_range.rolling_mean(window_size=14)
+        ema_20 = close.ewm_mean(span=20)
+        keltner_width = 2.0 * atr_14
+        bb_std = close.rolling_std(window_size=20)
+        bb_width = (4.0 * bb_std / (close.rolling_mean(window_size=20) + 1e-8)).clip(0.0, 10.0)
+        bb_width_mean = bb_width.rolling_mean(window_size=30)
+        bb_width_std = bb_width.rolling_std(window_size=30)
+        return df.with_columns(
+            [
+                (atr_14 / (close + 1e-8)).clip(0.0, 10.0).alias("atr_ratio_14"),
+                ((close - (ema_20 + keltner_width)) / (close + 1e-8))
+                .clip(-10.0, 10.0)
+                .alias("keltner_upper_dist"),
+                ((close - (ema_20 - keltner_width)) / (close + 1e-8))
+                .clip(-10.0, 10.0)
+                .alias("keltner_lower_dist"),
+                ((bb_width - bb_width_mean) / (bb_width_std + 1e-8))
+                .clip(-10.0, 10.0)
+                .alias("bb_width_z_30"),
+            ]
+        )
+
+    @staticmethod
+    def volume_flow_features(df: pl.DataFrame, window: int = 24) -> pl.DataFrame:
+        """Add normalized volume trend, OBV momentum and volume-weighted deviation."""
+        close = pl.col("close").cast(pl.Float64)
+        volume = pl.col("volume").cast(pl.Float64)
+        volume_mean = volume.rolling_mean(window_size=window)
+        normalized_volume = ((volume / (volume_mean + 1e-8)) - 1.0).clip(-10.0, 10.0)
+        direction = pl.when(close > close.shift(1)).then(1.0).when(
+            close < close.shift(1)
+        ).then(-1.0).otherwise(0.0)
+        obv_increment = direction * volume
+        obv = obv_increment.cum_sum()
+        obv_change = obv - obv.shift(window)
+        volume_scale = volume.rolling_sum(window_size=window)
+        obv_momentum = (obv_change / (volume_scale + 1e-8)).clip(-10.0, 10.0)
+        typical_price = (
+            pl.col("high").cast(pl.Float64)
+            + pl.col("low").cast(pl.Float64)
+            + close
+        ) / 3.0
+        vwap = (typical_price * volume).rolling_sum(window_size=window) / (
+            volume.rolling_sum(window_size=window) + 1e-8
+        )
+        return df.with_columns(
+            [
+                normalized_volume.alias("normalized_volume_trend_24"),
+                obv_momentum.alias("obv_momentum_24"),
+                ((close - vwap) / (close + 1e-8))
+                .clip(-10.0, 10.0)
+                .alias("volume_weighted_price_deviation_24"),
+            ]
+        )
+
+    @staticmethod
+    def return_moment_features(
+        df: pl.DataFrame, return_col: str = "log_return", window: int = 30
+    ) -> pl.DataFrame:
+        """Add rolling skewness and excess kurtosis of log returns."""
+        returns = pl.col(return_col).cast(pl.Float64)
+        rolling_count = returns.is_not_null().cast(pl.Int64).rolling_sum(window_size=window)
+        rolling_std = returns.rolling_std(window_size=window)
+        skew = returns.rolling_skew(window_size=window, bias=False)
+        kurtosis = returns.rolling_kurtosis(window_size=window, fisher=True, bias=False)
+        return df.with_columns(
+            [
+                pl.when(rolling_count < window)
+                .then(None)
+                .when(rolling_std <= 1e-12)
+                .then(0.0)
+                .otherwise(skew)
+                .clip(-20.0, 20.0)
+                .fill_nan(0.0)
+                .alias(f"return_skew_{window}"),
+                pl.when(rolling_count < window)
+                .then(None)
+                .when(rolling_std <= 1e-12)
+                .then(0.0)
+                .otherwise(kurtosis)
+                .clip(-20.0, 100.0)
+                .fill_nan(0.0)
+                .alias(f"return_kurtosis_{window}"),
+            ]
+        )
