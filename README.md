@@ -51,7 +51,7 @@ Antes de abrir uma nova posição, o runner compara as features recentes (`vol_p
 ### Fatores Alpha adicionais
 O pipeline inclui 14 fatores adicionais: `roc_3`, `roc_6`, `roc_12`, `roc_24`, `tsi_25_13`, `atr_ratio_14`, `keltner_upper_dist`, `keltner_lower_dist`, `bb_width_z_30`, `normalized_volume_trend_24`, `obv_momentum_24`, `volume_weighted_price_deviation_24`, `return_skew_30` e `return_kurtosis_30`. Features são limitadas em faixas defensivas quando aplicável e seus valores de warmup nulos/não finitos são removidos.
 
-No rebuild de ETH/USDT, o DataFrame contém **32 features derivadas** e o modelo utiliza 24 colunas (as 10 anteriores mais os 14 fatores novos). O ROC AUC walk-forward OOS foi **0,5105**. A calibração teve 0,50 como único candidato que atingiu PF >= 1 e 20+ trades na janela de calibração, mas falhou no holdout (PF 0,57); portanto, **não há threshold recomendado e o modelo não deve ser operado**.
+No rebuild de ETH/USDT, o DataFrame contém **32 features derivadas**. A seleção Purged MDA manteve 13 features, listadas em `config/selected_features.json`. Após o retreino, o ROC AUC walk-forward OOS foi **0,5334**. O threshold 0,50 foi selecionado na calibração, mas falhou no holdout (PF 0,60; retorno -12,07%); portanto, **não há threshold recomendado e o modelo não deve ser operado**.
 
 ---
 
@@ -60,10 +60,12 @@ Resultados com probabilidades **somente out-of-sample** (Purged Walk-Forward), s
 
 | Ativo / Par | OOS ROC AUC | Taxa base (TP primeiro) | Threshold | Trades | Win Rate | Profit Factor | Retorno Total |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| ETH/USDT | 0.489 | 40.1% | 0.62 | 24 | 41.7% | 0.73 | -4.24% |
+| ETH/USDT | 0.533 | 40.1% | 0.50* | 63 | 38.1% | 0.60 | -12.07% |
 | BTC/USDT | 0.484 | 41.0% | 0.62 | 13 | 38.5% | 0.85 | -0.82% |
 
-**Status: sem edge comprovado.** O AUC fora da amostra é indistinguível de 0,5 e nenhum threshold entre 0,50 e 0,65 atinge Profit Factor >= 1 no período de calibração. Opere apenas em PAPER até um modelo passar no holdout de `calibrate_thresholds.py`.
+**Status: sem edge comprovado.** O threshold ETH de 0,50 é apenas o candidato escolhido na janela de calibração; falhou no holdout e não é recomendado para operação. Opere apenas em PAPER até um modelo passar no holdout de `calibrate_thresholds.py`. Valores de BTC são do baseline anterior à seleção MDA.
+
+`*` Threshold selecionado na calibração; as métricas na linha são do holdout temporal não usado para seleção.
 
 > O valor publicado anteriormente (+9,32%, PF 1,81) vinha de rodar o backtest sobre o dataset esparso (apenas linhas com sinal), onde "24 barras" correspondiam a dias de mercado e a máxima/mínima de horas não observadas era ignorada.
 

@@ -13,6 +13,7 @@ from config.settings import settings
 from src.data.dataset import DatasetBuilder
 from src.features.storage import FeatureStorage
 from src.models.trainer import QuantModelTrainer
+from src.models.storage import ModelStorage
 from src.backtest.engine import VectorizedBacktester
 from src.backtest.metrics import PerformanceMetrics
 from src.utils.logger import logger
@@ -49,7 +50,13 @@ def main() -> None:
         logger.error(f"Dataset or features for {args.symbol} ({args.timeframe}) unavailable.")
         sys.exit(1)
 
-    feature_cols = [col for col in settings.MODEL_FEATURES if col in df_dataset.columns]
+    _, metadata = ModelStorage().load_model(args.symbol, args.timeframe)
+    feature_cols = metadata.get("feature_cols")
+    if not isinstance(feature_cols, list) or not feature_cols:
+        raise ValueError("Saved model metadata does not contain trained feature columns.")
+    missing = [col for col in feature_cols if col not in df_dataset.columns]
+    if missing:
+        raise ValueError(f"Saved model features are missing from calibration data: {missing}")
     oos_probs = QuantModelTrainer().cross_val_predict_walk_forward(df_dataset, feature_cols=feature_cols)
     p_y1 = oos_probs[:, 1]
 

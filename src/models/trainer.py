@@ -1,11 +1,13 @@
 """LightGBM quantitative machine learning model trainer with sample weights support and binary meta-labeling."""
 
+import json
 import numpy as np
 import pandas as pd
 import polars as pl
 from lightgbm import LGBMClassifier
 from sklearn.base import clone
 from sklearn.metrics import log_loss, accuracy_score, roc_auc_score
+from pathlib import Path
 from config.settings import settings
 from src.utils.logger import logger
 
@@ -47,6 +49,32 @@ class QuantModelTrainer:
             **params,
         )
         self.feature_cols: list[str] = []
+
+    @staticmethod
+    def configured_feature_cols(
+        available_cols: list[str], selected_features_path: str | Path | None = None
+    ) -> list[str]:
+        """Resolve available model features from selection output or project defaults."""
+        path = (
+            Path(selected_features_path)
+            if selected_features_path is not None
+            else Path(__file__).resolve().parents[2] / "config" / "selected_features.json"
+        )
+        configured = settings.MODEL_FEATURES
+        if path.exists():
+            with path.open(encoding="utf-8") as feature_file:
+                selected = json.load(feature_file)
+            if not isinstance(selected, list) or not all(
+                isinstance(feature, str) for feature in selected
+            ):
+                raise ValueError(f"{path} must contain a JSON array of feature names.")
+            if not selected:
+                raise ValueError(f"{path} does not contain any selected features.")
+            configured = selected
+        missing = [feature for feature in configured if feature not in available_cols]
+        if missing:
+            raise ValueError(f"Configured model features are missing from data: {missing}")
+        return list(configured)
 
     def train(
         self,

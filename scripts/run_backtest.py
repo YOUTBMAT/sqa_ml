@@ -41,7 +41,7 @@ def main() -> None:
         sys.exit(1)
 
     if args.mode == "walk-forward":
-        feature_cols = [col for col in settings.MODEL_FEATURES if col in df_dataset.columns]
+        feature_cols = QuantModelTrainer.configured_feature_cols(df_dataset.columns)
         p_y1 = QuantModelTrainer().cross_val_predict_walk_forward(df_dataset, feature_cols=feature_cols)[:, 1]
         first_scored = pd.to_datetime(df_dataset["timestamp"].to_pandas())[~np.isnan(p_y1)].min()
     else:

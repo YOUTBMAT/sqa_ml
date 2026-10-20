@@ -1,0 +1,15 @@
+[
+  "roc_24",
+  "obv_momentum_24",
+  "vol_ratio_6_24",
+  "ema_200_dist",
+  "hurst_100",
+  "return_kurtosis_30",
+  "tsi_25_13",
+  "vol_parkinson_pct",
+  "adx_14",
+  "rsi_adaptive",
+  "keltner_lower_dist",
+  "vol_parkinson",
+  "vwap_lower_2_dist"
+]

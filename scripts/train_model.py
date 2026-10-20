@@ -39,7 +39,7 @@ def main() -> None:
         logger.error(f"Dataset for {args.symbol} ({args.timeframe}) could not be built or loaded.")
         sys.exit(1)
 
-    feature_cols = [col for col in settings.MODEL_FEATURES if col in df_dataset.columns]
+    feature_cols = QuantModelTrainer.configured_feature_cols(df_dataset.columns)
 
     print("\n--- EXACT LIST OF FEATURE COLUMNS USED IN TRAINING ---")
     for f in feature_cols:
