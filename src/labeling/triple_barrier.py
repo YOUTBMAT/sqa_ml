@@ -41,7 +41,12 @@ class TripleBarrierLabeler:
 
     @classmethod
     def get_labels(
-        cls, df: pl.DataFrame, pt_sl: list[float] = settings.PT_SL_RATIO, num_bars: int = settings.MAX_HOLD_HOURS
+        cls,
+        df: pl.DataFrame,
+        pt_sl: list[float] = settings.PT_SL_RATIO,
+        num_bars: int | None = None,
+        *,
+        max_holding_hours: int | None = None,
     ) -> pl.DataFrame:
         """Label every primary-signal bar with the shared barrier simulator.
 
@@ -49,6 +54,14 @@ class TripleBarrierLabeler:
         primary_signal, target_label (1 = take profit hit first), target_return (gross barrier return),
         barrier_touched ("tp"/"sl"/"t1") and t1 (actual exit timestamp, used for purging and concurrency).
         """
+        if num_bars is not None and max_holding_hours is not None and num_bars != max_holding_hours:
+            raise ValueError("num_bars and max_holding_hours must match when both are provided.")
+        holding_hours = max_holding_hours if max_holding_hours is not None else num_bars
+        if holding_hours is None:
+            holding_hours = settings.MAX_HOLD_HOURS
+        if isinstance(holding_hours, bool) or not isinstance(holding_hours, int) or holding_hours < 1:
+            raise ValueError("max_holding_hours must be a positive integer.")
+
         logger.info("Starting Meta-Labeling pipeline...")
         if df.is_empty():
             return df
@@ -66,7 +79,9 @@ class TripleBarrierLabeler:
         for i in np.flatnonzero(signals):
             if not np.isfinite(atr_values[i]) or atr_values[i] <= 0:
                 continue
-            outcome = simulate_trade(open_, high, low, close, i, int(signals[i]), atr_values[i], pt_mult, sl_mult, num_bars)
+            outcome = simulate_trade(
+                open_, high, low, close, i, int(signals[i]), atr_values[i], pt_mult, sl_mult, holding_hours
+            )
             if outcome is None:
                 continue  # data ends before the barrier resolves: label unknown
             ret = (outcome.exit_price - close[i]) / close[i] * signals[i]

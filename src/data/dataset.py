@@ -25,7 +25,13 @@ class DatasetBuilder:
         return self.datasets_dir / filename
 
     def build_dataset(
-        self, symbol: str, timeframe: str, pt_sl: list[float] = settings.PT_SL_RATIO, num_bars: int = settings.MAX_HOLD_HOURS
+        self,
+        symbol: str,
+        timeframe: str,
+        pt_sl: list[float] = settings.PT_SL_RATIO,
+        num_bars: int | None = None,
+        *,
+        max_holding_hours: int | None = None,
     ) -> pl.DataFrame:
         """Build supervised ML dataset for a given symbol and timeframe.
 
@@ -44,7 +50,9 @@ class DatasetBuilder:
             return pl.DataFrame()
 
         # 2. Compute Triple Barrier Labels
-        df_labeled = TripleBarrierLabeler.get_labels(df_features, pt_sl=pt_sl, num_bars=num_bars)
+        df_labeled = TripleBarrierLabeler.get_labels(
+            df_features, pt_sl=pt_sl, num_bars=num_bars, max_holding_hours=max_holding_hours
+        )
         if df_labeled.is_empty():
             logger.warning(f"Labeling produced empty dataset for {symbol} ({timeframe}).")
             return pl.DataFrame()
