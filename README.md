@@ -39,6 +39,15 @@ A arquitetura adota um modelo de duas camadas (Sinal Primário + Filtro de Machi
 - **Limiar Operacional de Confirmação (Paper):**
   - O sinal primário para o ativo **ETH/USDT** é executado apenas quando $P(y=1) \ge 0.62$ (`settings.PROB_THRESHOLD`). Ver seção 5 antes de considerar capital real.
 
+### Proteção contra Data Drift
+Antes de abrir uma nova posição, o runner compara as features recentes (`vol_parkinson`, `frac_diff_close`, `vwap_dist` e `rsi_adaptive`) com a distribuição do dataset de treino usando PSI. Se qualquer feature ultrapassar 0.25, novas entradas para o ativo são pausadas até a distribuição normalizar. A ausência de dataset de referência ou de features válidas também mantém o ativo em modo protetor.
+
+| PSI | Interpretação | Ação |
+| :---: | --- | --- |
+| `< 0.10` | Estável | Operação normal |
+| `0.10–0.25` | Alerta | Monitorar |
+| `> 0.25` | Desvio severo | Pausar novas entradas |
+
 ---
 
 ## 5. Desempenho Out-Of-Sample (Engine Contínuo Barra a Barra)

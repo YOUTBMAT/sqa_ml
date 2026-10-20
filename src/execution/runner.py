@@ -8,6 +8,7 @@ import polars as pl
 from config.settings import settings
 
 from src.data.collectors.crypto import CryptoCollector
+from src.data.dataset import DatasetBuilder
 from src.features.pipeline import FeaturePipeline
 from src.labeling.barriers import atr
 from src.models.storage import ModelStorage
@@ -15,6 +16,14 @@ from src.risk.manager import RiskManager
 from src.execution.engine import ExecutionEngine
 from src.utils.notifications import TelegramNotifier
 from src.utils.logger import logger
+from src.validation.drift import DataDriftDetector
+
+CRITICAL_DRIFT_FEATURES = (
+    "vol_parkinson",
+    "frac_diff_close",
+    "vwap_dist",
+    "rsi_adaptive",
+)
 
 
 class BotRunner:
@@ -42,6 +51,9 @@ class BotRunner:
         self.notifier = TelegramNotifier()
         self.model_storage = ModelStorage()
         self.feature_pipeline = FeaturePipeline()
+        self.dataset_builder = DatasetBuilder()
+        self.training_data_cache: dict[str, pl.DataFrame] = {}
+        self.protective_mode: dict[str, bool] = {}
 
     async def start(self) -> None:
         """Start the continuous execution loop."""
@@ -117,6 +129,50 @@ class BotRunner:
         if df_features.is_empty():
             logger.warning(f"Feature pipeline returned empty DataFrame for {symbol}.")
             return
+
+        # Compare a rolling live window against the feature distribution used for training.
+        reference = self.training_data_cache.get(symbol)
+        if reference is None:
+            reference = self.dataset_builder.load_dataset(symbol, self.timeframe)
+            self.training_data_cache[symbol] = reference
+
+        missing_live_features = [
+            feature for feature in CRITICAL_DRIFT_FEATURES if feature not in df_features.columns
+        ]
+        if reference.is_empty() or missing_live_features:
+            self.protective_mode[symbol] = True
+            logger.warning(
+                f"Protective mode enabled for {symbol}: training drift reference unavailable "
+                f"or critical live features missing ({missing_live_features})."
+            )
+            return
+
+        try:
+            psi_values, has_severe_drift = DataDriftDetector.check_feature_drift(
+                reference,
+                df_features.tail(100).select(CRITICAL_DRIFT_FEATURES),
+                CRITICAL_DRIFT_FEATURES,
+            )
+        except ValueError as exc:
+            self.protective_mode[symbol] = True
+            logger.warning(f"Protective mode enabled for {symbol}: drift check failed: {exc}")
+            return
+
+        if has_severe_drift:
+            self.protective_mode[symbol] = True
+            severe_features = {
+                feature: value
+                for feature, value in psi_values.items()
+                if value > DataDriftDetector.SEVERE_DRIFT_THRESHOLD
+            }
+            logger.warning(
+                f"Protective mode enabled for {symbol}: severe feature drift detected "
+                f"(PSI > {DataDriftDetector.SEVERE_DRIFT_THRESHOLD}: {severe_features}). "
+                "New entries are paused."
+            )
+            return
+        if self.protective_mode.pop(symbol, False):
+            logger.info(f"Protective mode cleared for {symbol}: feature distributions normalized.")
 
         # 3. Model Prediction & 2-Stage Primary Signal Filtering
         try:

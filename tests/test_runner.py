@@ -8,9 +8,11 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 from src.execution.runner import BotRunner
+from src.validation.drift import DataDriftDetector
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("severe_drift", [False, True])
 @patch("src.labeling.triple_barrier.TripleBarrierLabeler.get_primary_signal")
 @patch("src.execution.runner.CryptoCollector")
 @patch("src.execution.runner.ModelStorage")
@@ -20,6 +22,7 @@ async def test_bot_runner_single_iteration(
     mock_storage_cls: MagicMock,
     mock_collector_cls: MagicMock,
     mock_primary_signal: MagicMock,
+    severe_drift: bool,
 ) -> None:
     """Test BotRunner processes a symbol iteration correctly with mocked collector and model."""
     # Mock Notifier
@@ -72,7 +75,26 @@ async def test_bot_runner_single_iteration(
     mock_engine.paper_trader.peak_equity = 10000.0
     mock_engine.paper_trader.day_start_equity = 9800.0
 
-    await runner._process_symbol("BTC/USDT", mock_engine)
+    runner.training_data_cache["BTC/USDT"] = pl.DataFrame(
+        {
+            "vol_parkinson": [0.1] * 20,
+            "frac_diff_close": [100.0] * 20,
+            "vwap_dist": [0.0] * 20,
+            "rsi_adaptive": [50.0] * 20,
+        }
+    )
+    with patch.object(
+        DataDriftDetector,
+        "check_feature_drift",
+        return_value=({"vol_parkinson": 0.30 if severe_drift else 0.0}, severe_drift),
+    ):
+        await runner._process_symbol("BTC/USDT", mock_engine)
+
+    if severe_drift:
+        mock_engine.place_order.assert_not_awaited()
+        assert runner.protective_mode["BTC/USDT"] is True
+        return
+
     mock_engine.place_order.assert_awaited()
     kwargs = mock_engine.place_order.await_args.kwargs
     # Same barriers as labels/backtest: ATR-14 (true range is 10 on every mock bar), TP 1.5x, SL 1.0x.
