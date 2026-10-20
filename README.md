@@ -1,133 +1,119 @@
-# SQA-ML: Systematic Quantitative Architecture & Machine Learning Trading Bot
+# SQA-ML v2.0
 
-> **Institutional Quantitative Framework for Automated Crypto Assets Trading (1h Timeframe)**
+Framework de pesquisa e execução sistemática para criptoativos, com foco atual em ETH/USDT no timeframe de 1h. A versão 2.0 reúne validação temporal purged, engenharia de fatores, seleção MDA, controle de drift e sizing com risco de portfólio. **LIVE permanece desativado**; os resultados atuais não comprovam edge sustentável e não devem ser interpretados como recomendação de operação.
 
----
+## Arquitetura
 
-## 1. Visão Geral
-**SQA-ML** é um framework quantitativo institucional projetado para negociação automatizada e sistemática em mercados de criptoativos de alta liquidez. O sistema fundamenta-se nos princípios rigorosos de engenharia financeira quantitativa definidos por **Marcos López de Prado**, incorporando **Meta-Labeling**, **Método de Tripla Barreira (Triple Barrier Method)**, e **Purged Walk-Forward Cross-Validation** para garantir zero vazamento de dados futuros (*zero lookahead bias*) e robustez estatística em regime *out-of-sample*.
+O fluxo de pesquisa é:
 
----
+1. Coleta de candles OHLCV via CCXT e cálculo de features em `src/features/`.
+2. Rotulagem Meta-Labeling / Triple Barrier em `src/labeling/`, com TP = 1,5 ATR, SL = 1 ATR e barreira temporal configurável.
+3. Pesos por unicidade e eventos concorrentes.
+4. Seleção de features por **Purged MDA** nos folds temporais OOS.
+5. Treino LightGBM e avaliação por Purged Walk-Forward.
+6. Calibração de thresholds em simulação contínua, separando calibração e holdout.
 
-## 2. Objetivos do Projeto
-- **Expectativa Matemática Positiva:** Desenvolvimento e validação de estratégias quantitativas com *Profit Factor > 1.25* e *Sharpe Ratio > 1.20* em dados *Out-Of-Sample* (OOS).
-- **Simulação Realista Event-Driven:** Backtesting e simulação rigorosos com contabilização de custos operacionais e taxas reais (*taker/maker fee* de 0.05% por perna), com métricas calculadas estritamente por *round-trip* (operações encerradas).
-- **Automação 24/7:** Execução autônoma contínua em ambiente Linux (Ubuntu Systemd) integrada via CCXT, operando em modo *Paper Trading* para estresse contínuo na Binance Spot API.
+Na execução PAPER, o runner verifica data drift e sinal primário, consulta o modelo e delega sizing e limites ao `PortfolioManager`. O `ExecutionEngine` valida os circuit breakers antes de encaminhar ordens ao `PaperTrader`, que mantém estado, PnL, posições e ciclo de ordens.
 
----
+## Componentes v2.0
 
-## 3. Relatório de Remediação e Auditoria Quantitativa (Fases 1 a 4)
-O sistema passou por uma auditoria estrutural e matemática profunda dividida em 4 fases evolutivas:
-1. **Fase 1 (Ingestão e Coleta Robusta):** Expansão da janela histórica para 1.000 velas horárias via CCXT, incorporando tratamento de falhas, timeouts e retransmissões exponenciais.
-2. **Fase 2 (Persistência Atômica e Sanitização):** Implementação de escrita JSON atômica em operações de estado de portfólio (`paper_portfolio.json`) e limpeza estrita de valores nulos e infinitos no pipeline de dados.
-3. **Fase 3 (Engine de Backtest Contínuo Barra a Barra):** Substituição do simulador de sinais esparsos por um motor *Event-Driven* contínuo barra a barra, eliminando saltos de sinais e permitindo rastreamento exato de posições abertas, *Take-Profit*, *Stop-Loss* e *Max Hold Hours*.
-4. **Fase 4 (Regras de Warmup, Limpeza e Calibração):** Aplicação de regras de *warmup* para indicadores técnicos, alinhamento de timestamps e varredura paramétrica de limiares de probabilidade $P(y=1)$ entre 0.50 e 0.65.
+### Ciclo de vida de ordens — `src/execution/fsm.py`
 
----
+`OrderFSM` aplica transições válidas entre `PENDING_SUBMIT`, `OPEN`, `PARTIALLY_FILLED`, `FILLED`, `CANCELING`, `EXPIRED`, `REJECTED` e `FAILED`. Registra histórico e rejeita mudanças ilegais. O engine reconcilia estados CCXT e mantém respostas desconhecidas/orfãs para investigação; Paper usa a FSM também em ordens de abertura e encerramento.
 
-## 4. Arquitetura da Estratégia (Squeeze + Meta-Labeling)
-A arquitetura adota um modelo de duas camadas (Sinal Primário + Filtro de Machine Learning):
+### Data drift por PSI — `src/validation/drift.py`
 
-- **Sinal Primário (Filtro de Regime / Squeeze):**
-  - Detecção de compressão de volatilidade através do indicador *Vol Ratio* (`vol_ratio_6_24 < 0.75`) combinado com rompimento dinâmico de VWAP.
-- **Modelo Secundário (Meta-Labeling com LightGBM):**
-  - Classificador Binário **LightGBM** regularizado (`max_depth=3`, `num_leaves=7`, `learning_rate=0.03`), treinado estritamente nas 10 principais *features* estacionárias ranqueadas por ganho de informação (*Gain*).
-- **Gerenciamento de Risco (Triplo Barreira):**
-  - **Take-Profit (TP):** $1.5 \times \text{ATR}$
-  - **Stop-Loss (SL):** $1.0 \times \text{ATR}$
-  - **Barreira Temporal ($t_1$):** Encerramento compulsório após 24 horas.
-- **Limiar Operacional de Confirmação (Paper):**
-  - O sinal primário para o ativo **ETH/USDT** é executado apenas quando $P(y=1) \ge 0.62$ (`settings.PROB_THRESHOLD`). Ver seção 5 antes de considerar capital real.
-
-### Proteção contra Data Drift
-Antes de abrir uma nova posição, o runner compara as features recentes (`vol_parkinson`, `frac_diff_close`, `vwap_dist` e `rsi_adaptive`) com a distribuição do dataset de treino usando PSI. Se qualquer feature ultrapassar 0.25, novas entradas para o ativo são pausadas até a distribuição normalizar. A ausência de dataset de referência ou de features válidas também mantém o ativo em modo protetor.
+`DataDriftDetector` compara distribuições de features de treino e live usando Population Stability Index. O runner observa `vol_parkinson`, `frac_diff_close`, `vwap_dist` e `rsi_adaptive`; PSI > 0,25 ou referência indisponível ativa o modo protetor, que impede novas entradas.
 
 | PSI | Interpretação | Ação |
-| :---: | --- | --- |
-| `< 0.10` | Estável | Operação normal |
-| `0.10–0.25` | Alerta | Monitorar |
-| `> 0.25` | Desvio severo | Pausar novas entradas |
+|---:|---|---|
+| < 0,10 | Estável | Normal |
+| 0,10–0,25 | Alerta | Monitorar |
+| > 0,25 | Severo | Pausar entradas |
 
-### Fatores Alpha adicionais
-O pipeline inclui 14 fatores adicionais: `roc_3`, `roc_6`, `roc_12`, `roc_24`, `tsi_25_13`, `atr_ratio_14`, `keltner_upper_dist`, `keltner_lower_dist`, `bb_width_z_30`, `normalized_volume_trend_24`, `obv_momentum_24`, `volume_weighted_price_deviation_24`, `return_skew_30` e `return_kurtosis_30`. Features são limitadas em faixas defensivas quando aplicável e seus valores de warmup nulos/não finitos são removidos.
+### Seleção de features — `src/features/selection.py`
 
-No rebuild de ETH/USDT, o DataFrame contém **32 features derivadas**. A seleção Purged MDA manteve 13 features, listadas em `config/selected_features.json`. Após o retreino, o ROC AUC walk-forward OOS foi **0,5334**. O threshold 0,50 foi selecionado na calibração, mas falhou no holdout (PF 0,60; retorno -12,07%); portanto, **não há threshold recomendado e o modelo não deve ser operado**.
+`PurgedFeatureSelector` calcula Mean Decrease Accuracy como a queda da ROC AUC OOS após permutar uma feature, em folds do `PurgedGroupTimeSeriesSplit`. `scripts/select_features.py` mantém features com MDA médio positivo e grava a lista em `config/selected_features.json`. O conjunto atual contém 13 features; cada novo treino recalcula a seleção em staging antes de qualquer promoção.
 
----
+### Gestão de portfólio — `src/risk/portfolio.py`
 
-## 5. Desempenho Out-Of-Sample (Engine Contínuo Barra a Barra)
-Resultados com probabilidades **somente out-of-sample** (Purged Walk-Forward), simuladas sobre as barras horárias contínuas com as mesmas barreiras do rótulo (SL vence em barra ambígua, gaps preenchem na abertura), custos de 0,07% por lado. Reproduza com `scripts/run_backtest.py --symbol ETH/USDT` e `scripts/calibrate_thresholds.py`.
+`PortfolioManager` transforma probabilidade e payoff em fração de Kelly, aplica um fator fracionado de segurança e normaliza por ATR/preço. Também aplica limite de exposição total, drawdown diário/global e circuit breaker de volatilidade. Configuração padrão: Kelly 0,25, drawdown diário 3%, drawdown global 15%, exposição aberta máxima 20% e bloqueio quando ATR/preço atinge 10%.
 
-| Ativo / Par | OOS ROC AUC | Taxa base (TP primeiro) | Threshold | Trades | Win Rate | Profit Factor | Retorno Total |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| ETH/USDT | 0.533 | 40.1% | 0.50* | 63 | 38.1% | 0.60 | -12.07% |
-| BTC/USDT | 0.484 | 41.0% | 0.62 | 13 | 38.5% | 0.85 | -0.82% |
+Equações principais:
 
-**Status: sem edge comprovado.** O threshold ETH de 0,50 é apenas o candidato escolhido na janela de calibração; falhou no holdout e não é recomendado para operação. Opere apenas em PAPER até um modelo passar no holdout de `calibrate_thresholds.py`. Valores de BTC são do baseline anterior à seleção MDA.
+\[
+f^* = \frac{p b - (1-p)}{b}, \qquad
+f_{\mathrm{frac}} = \max(0, f^*) \cdot 0{,}25
+\]
 
-`*` Threshold selecionado na calibração; as métricas na linha são do holdout temporal não usado para seleção.
+\[
+s_{\mathrm{ATR}} = \min\left(1,\frac{2\%}{ATR/\text{preço}}\right), \qquad
+\text{notional} = \min(\text{saldo}\cdot f_{\mathrm{frac}}\cdot s_{\mathrm{ATR}}, \text{exposição restante})
+\]
 
-> O valor publicado anteriormente (+9,32%, PF 1,81) vinha de rodar o backtest sobre o dataset esparso (apenas linhas com sinal), onde "24 barras" correspondiam a dias de mercado e a máxima/mínima de horas não observadas era ignorada.
+O runner limita `p` ao win rate observado antes de calcular Kelly; probabilidades estimadas não calibradas não podem aumentar o risco acima dessa taxa.
 
----
+### Automação segura — `scripts/autotrain.py`
 
-## 6. Estrutura do Repositório
-```tree
-sqa_ml/
-├── config/              # Configurações globais e de parâmetros (settings.py, .env)
-├── data/                # Bases de dados históricas, datasets processados e logs de erro
-├── models/              # Artefatos salvos de modelos treinados (.joblib)
-├── scripts/             # Scripts executáveis de pipeline (build, treino, backtest, live)
-├── src/
-│   ├── data/            # Coordenadores e coletores CCXT (crypto.py)
-│   ├── features/        # Engenharia de features, retornos e estacionariedade
-│   ├── labels/          # Rotulagem Tripla Barreira e Meta-Labeling
-│   ├── models/          # Implementação e treino do LightGBM
-│   ├── backtest/        # Motor de backtest event-driven contínuo
-│   ├── execution/       # Runner live, gerenciador de ordens e risk management
-│   ├── risk/            # Gestão de risco e dimensionamento de posição
-│   └── validation/      # Purged Walk-Forward CV
-├── tests/               # Testes unitários e de integração (pytest)
-├── requirements.txt     # Dependências do projeto Python
-├── sqa_ml_bot.service   # Arquivo de serviço systemd para Ubuntu
-└── README.md            # Documentação técnica do projeto
-```
+Executa coleta OHLCV, engenharia de features, rebuild do dataset, Purged MDA, treino e calibração/holdout em sequência. O modelo, metadata e features selecionadas são produzidos em staging. O script mantém `models/saved/autotrain_safety_lock.json` ativo durante o processo e em caso de falha; a promoção e remoção do lock só ocorrem quando existe threshold calibrável e o holdout apresenta PF > 1 e retorno positivo. O runner respeita esse lock e não abre novas posições.
 
----
+## Status de validação
 
-## 7. Guia de Execução e Comandos Systemd
+- Seleção MDA de ETH/USDT: ROC AUC walk-forward OOS 0,5334 no experimento reportado.
+- A calibração de 24h selecionou threshold 0,50, mas o holdout ficou em PF 0,60 e retorno -12,07%; não aprovada para operação.
+- Na análise 12h/24h/48h, 12h teve PF OOS 1,2897 e retorno holdout +0,34%, mas PF holdout 1,1173. Não atingiu o critério mais rigoroso de PF > 1,20 também no holdout.
+- Não há evidência atual de edge robusto. Modo PAPER apenas; o modo LIVE segue explicitamente desabilitado.
 
-### 1. Configuração do Ambiente Virtual
+Consulte [ROADMAP.md](ROADMAP.md) para o histórico das fases de auditoria e etapas v2.0.
+
+## Instalação e comandos
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Construção de Datasets e Treinamento
+Com `PYTHONPATH=src:config:.`:
+
 ```bash
-PYTHONPATH=src:config:. python scripts/build_dataset.py --symbol ETH/USDT
-PYTHONPATH=src:config:. python scripts/train_model.py --symbol ETH/USDT
-PYTHONPATH=src:config:. python scripts/calibrate_thresholds.py --symbol ETH/USDT
+./venv/bin/python scripts/run_collector.py --symbols ETH/USDT --timeframe 1h --days 365
+./venv/bin/python scripts/generate_features.py --symbols ETH/USDT --timeframe 1h
+./venv/bin/python scripts/build_dataset.py --symbol ETH/USDT
+./venv/bin/python scripts/select_features.py --symbol ETH/USDT
+./venv/bin/python scripts/train_model.py --symbol ETH/USDT
+./venv/bin/python scripts/calibrate_thresholds.py --symbol ETH/USDT
 ```
 
-### 3. Testes Unitários de Regressão
+Automação completa (requer exchange acessível):
+
 ```bash
-pytest
+PYTHONPATH=src:config:. ./venv/bin/python scripts/autotrain.py --symbol ETH/USDT
 ```
 
-### 4. Gerenciamento do Serviço Systemd (Paper Mode 24/7)
-Para controlar o robô de trading em modo *Paper* no Ubuntu:
+Verificações:
+
 ```bash
-# Verificar status do serviço
-systemctl --user status sqa_ml_bot.service --no-pager
+./venv/bin/pytest
+PYTHONPATH=src:config:. ./venv/bin/python scripts/verify_phase1.py
+PYTHONPATH=src:config:. ./venv/bin/python scripts/verify_phase2_3.py
+PYTHONPATH=src:config:. ./venv/bin/python scripts/verify_phase4.py
+```
 
-# Reiniciar o bot
-systemctl --user restart sqa_ml_bot.service
+## Estrutura do repositório
 
-# Parar o bot
-systemctl --user stop sqa_ml_bot.service
-
-# Acompanhar logs em tempo real
-journalctl --user -u sqa_ml_bot.service -n 25 --no-pager
+```text
+config/                 Configuração e features selecionadas
+data/                   Candles, features, datasets e estado PAPER
+models/saved/           Modelo, metadata e lock de segurança do autotrain
+scripts/                Coleta, features, seleção, treino, calibração e pesquisa
+src/data/               Coletores e construção de datasets
+src/features/           Pipeline, fatores, armazenamento e Purged MDA
+src/labeling/           Triple Barrier e pesos de amostras
+src/models/              LightGBM, validação e persistência
+src/backtest/            Simulador contínuo e métricas
+src/execution/           Runner, engine, PaperTrader e FSM
+src/risk/                RiskManager e PortfolioManager
+src/validation/          Purged CV e detector PSI
+tests/                   Testes unitários e de regressão
 ```

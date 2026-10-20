@@ -26,20 +26,24 @@ def main() -> None:
         default="1h",
         help="Candle timeframe (e.g., 1h, 1d)",
     )
+    parser.add_argument("--models-dir", type=str, default="models/saved")
+    parser.add_argument("--selected-features", type=str, default=None)
 
     args = parser.parse_args()
 
     logger.info("=== INITIALIZING SQA-ML MODEL TRAINING CLI ===")
 
     builder = DatasetBuilder()
-    storage = ModelStorage()
+    storage = ModelStorage(models_dir=args.models_dir)
 
     df_dataset = builder.load_or_build(args.symbol, args.timeframe)
     if df_dataset.is_empty():
         logger.error(f"Dataset for {args.symbol} ({args.timeframe}) could not be built or loaded.")
         sys.exit(1)
 
-    feature_cols = QuantModelTrainer.configured_feature_cols(df_dataset.columns)
+    feature_cols = QuantModelTrainer.configured_feature_cols(
+        df_dataset.columns, selected_features_path=args.selected_features
+    )
 
     print("\n--- EXACT LIST OF FEATURE COLUMNS USED IN TRAINING ---")
     for f in feature_cols:

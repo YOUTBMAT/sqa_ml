@@ -18,6 +18,12 @@ def main() -> None:
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--embargo", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "config" / "selected_features.json",
+        help="Output path for the selected feature list.",
+    )
     args = parser.parse_args()
 
     dataset = DatasetBuilder().load_or_build(args.symbol, args.timeframe)
@@ -57,9 +63,9 @@ def main() -> None:
             "MDA did not identify any positive-importance features; selection file was not changed."
         )
 
-    output_path = Path(__file__).resolve().parents[1] / "config" / "selected_features.json"
-    output_path.write_text(json.dumps(selected, indent=2) + "\n", encoding="utf-8")
-    print(f"\nSelected {len(selected)} of {len(feature_cols)} active features: {output_path}")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(selected, indent=2) + "\n", encoding="utf-8")
+    print(f"\nSelected {len(selected)} of {len(feature_cols)} active features: {args.output}")
     print("Eliminated (mean MDA <= 0): " + (", ".join(eliminated) if eliminated else "none"))
 
 

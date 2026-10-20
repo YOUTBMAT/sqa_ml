@@ -1,8 +1,10 @@
 """Continuous asynchronous trading bot runner executing the live/paper trading loop."""
 
 import asyncio
+import json
 import signal
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 import polars as pl
 
 from config.settings import settings
@@ -176,10 +178,25 @@ class BotRunner:
         if self.protective_mode.pop(symbol, False):
             logger.info(f"Protective mode cleared for {symbol}: feature distributions normalized.")
 
+        safety_lock = Path(__file__).resolve().parents[2] / "models" / "saved" / "autotrain_safety_lock.json"
+        if safety_lock.exists():
+            try:
+                lock_data = json.loads(safety_lock.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.error(f"Cannot read autotrain safety lock {safety_lock}: {exc}")
+                return
+            if lock_data.get("active", True):
+                logger.warning(
+                    f"Autotrain safety lock is active for {symbol}: "
+                    f"{lock_data.get('reason', 'no reason supplied')}. New entries are disabled."
+                )
+                return
+
         # 3. Model Prediction & 2-Stage Primary Signal Filtering
         try:
             model, meta = self.model_storage.load_model(symbol, self.timeframe)
             feature_cols = meta.get("feature_cols", [])
+            calibrated_threshold = float(meta.get("calibrated_threshold", self.buy_threshold))
         except Exception:
             logger.warning(f"No trained model found for {symbol} ({self.timeframe}). Skipping prediction.")
             return
@@ -216,9 +233,9 @@ class BotRunner:
             account_balance = float(balance_info.get("free", 10000.0) if isinstance(balance_info, dict) else 10000.0)
 
         side = None
-        if latest_signal == 1 and p_y1 >= self.buy_threshold:
+        if latest_signal == 1 and p_y1 >= calibrated_threshold:
             side = "long"
-        elif latest_signal == -1 and p_y1 >= self.buy_threshold:
+        elif latest_signal == -1 and p_y1 >= calibrated_threshold:
             side = "short"
 
         if side:
