@@ -1,0 +1,12 @@
+[Unit]
+Description=SQA-ML Automated Model Retraining Pipeline
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/youtbmat/Documentos/Coding\ Projects/sqa_ml
+Environment="PYTHONPATH=src:config:."
+ExecStart="/home/youtbmat/Documentos/Coding Projects/sqa_ml/venv/bin/python" "scripts/autotrain.py" --symbol "ETH/USDT"
+StandardOutput=journal
+StandardError=journal

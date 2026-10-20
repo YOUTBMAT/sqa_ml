@@ -1,0 +1,10 @@
+[Unit]
+Description=Run SQA-ML Autotrain weekly on Sundays at 03:00 AM
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+Unit=sqa_ml_autotrain.service
+
+[Install]
+WantedBy=timers.target
