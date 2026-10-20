@@ -16,12 +16,14 @@ config/.env
 # Dados e Histórico do Paper Trading (Estado de Conta)
 data/paper/
 data/raw/
+data/features/*.parquet
 data/datasets/*.parquet
 data/backtest_results/*.parquet
 
 # Modelos Binários e Cache de Artefatos
 models/saved/*.joblib
 models/saved/*.pkl
+models/saved/*_lock.json
 
 # Logs e Arquivos de Sistema
 *.log
