@@ -3,7 +3,9 @@
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from uuid import uuid4
 from config.settings import settings
+from src.execution.fsm import OrderFSM, OrderState
 from src.labeling.barriers import check_bar
 from src.utils.logger import logger
 
@@ -31,6 +33,7 @@ class PaperTrader:
         self.balance = initial_balance
         self.positions: dict[str, dict] = {}
         self.order_history: list[dict] = []
+        self.order_fsms: dict[str, OrderFSM] = {}
         self.peak_equity = initial_balance
         self.day_start_equity = initial_balance
         self.equity_day: str | None = None
@@ -138,6 +141,10 @@ class PaperTrader:
             for ord_rec in raw_orders:
                 if isinstance(ord_rec.get("timestamp"), str):
                     ord_rec["timestamp"] = datetime.fromisoformat(ord_rec["timestamp"])
+                serialized_fsm = ord_rec.get("fsm")
+                if isinstance(serialized_fsm, dict):
+                    fsm = OrderFSM.from_dict(serialized_fsm)
+                    self.order_fsms[fsm.order_id] = fsm
             self.order_history = raw_orders
 
             logger.success(f"Successfully loaded paper portfolio state from {source_loaded} (Balance: ${self.balance:,.2f})")
@@ -168,6 +175,23 @@ class PaperTrader:
         """Check if there is an active open position for the given symbol."""
         return symbol in self.positions and self.positions[symbol]["amount"] > 0
 
+    def _record_rejected_order(self, fsm: OrderFSM, reason: str) -> None:
+        """Persist an order rejected before it could be filled."""
+        self.order_history.append(
+            {
+                "order_id": fsm.order_id,
+                "symbol": fsm.symbol,
+                "side": fsm.side,
+                "amount": fsm.amount,
+                "execution_price": fsm.price,
+                "timestamp": datetime.now(timezone.utc),
+                "status": fsm.state.value.lower(),
+                "reason": reason,
+                "fsm": fsm.to_dict(),
+            }
+        )
+        self._save_state()
+
     def execute_paper_order(
         self,
         symbol: str,
@@ -179,14 +203,25 @@ class PaperTrader:
         take_profit: float | None = None,
         entry_bar_ts: datetime | None = None,
         expires_at: datetime | None = None,
+        exit_reason: str | None = None,
     ) -> dict:
         """Execute virtual order with slippage, fee deductions, and state persistence supporting LONG and SHORT."""
         logger.info(f"[PAPER] Executing {side.upper()} order for {amount} {symbol} at ~{current_price}...")
-        
+        order_id = str(uuid4())
+        fsm = OrderFSM(order_id, symbol, side, amount, current_price)
+        self.order_fsms[order_id] = fsm
         if amount <= 0 or current_price <= 0:
+            reason = "Invalid order amount or price"
+            fsm.transition_to(OrderState.REJECTED, reason)
+            self._record_rejected_order(fsm, reason)
             raise ValueError("Invalid order amount or price.")
 
         side_lower = side.lower()
+        if side_lower not in {"buy", "long", "sell", "short"}:
+            reason = f"Unsupported side: {side}"
+            fsm.transition_to(OrderState.REJECTED, reason)
+            self._record_rejected_order(fsm, reason)
+            raise ValueError(f"Invalid order side: {side}")
         is_buy = side_lower in ["buy", "long"]
 
         # Apply slippage
@@ -194,6 +229,7 @@ class PaperTrader:
             execution_price = current_price * (1.0 + self.slippage_rate)
         else:
             execution_price = current_price * (1.0 - self.slippage_rate)
+        fsm.price = execution_price
 
         cost = amount * execution_price
         fee = cost * self.fee_rate
@@ -201,17 +237,24 @@ class PaperTrader:
         position = self.positions.get(symbol)
         has_pos = position is not None and position["amount"] > 0
 
-        if not has_pos:
-            # Opening new position
-            if is_buy:
-                # Open LONG
-                total_required = cost + fee
-                if self.balance < total_required:
-                    raise ValueError(f"Insufficient paper balance: required {total_required:.2f}, available {self.balance:.2f}")
-                self.balance -= total_required
+        try:
+            if not has_pos:
+                # Opening new position
+                if is_buy:
+                    total_required = cost + fee
+                    if self.balance < total_required:
+                        reason = "Insufficient paper balance"
+                        fsm.transition_to(OrderState.REJECTED, reason)
+                        raise ValueError(
+                            f"Insufficient paper balance: required {total_required:.2f}, available {self.balance:.2f}"
+                        )
+                    self.balance -= total_required
+                else:
+                    self.balance += cost - fee
+                fsm.transition_to(OrderState.OPEN, "Paper market order accepted")
                 self.positions[symbol] = {
                     "symbol": symbol,
-                    "side": "long",
+                    "side": "long" if is_buy else "short",
                     "amount": amount,
                     "entry_price": execution_price,
                     "stop_loss": stop_loss,
@@ -219,25 +262,15 @@ class PaperTrader:
                     "timestamp": datetime.now(timezone.utc),
                     "entry_bar_ts": entry_bar_ts,
                     "expires_at": expires_at,
+                    "entry_order_id": order_id,
                 }
             else:
-                # Open SHORT
-                self.balance += cost - fee
-                self.positions[symbol] = {
-                    "symbol": symbol,
-                    "side": "short",
-                    "amount": amount,
-                    "entry_price": execution_price,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit,
-                    "timestamp": datetime.now(timezone.utc),
-                    "entry_bar_ts": entry_bar_ts,
-                    "expires_at": expires_at,
-                }
-        else:
-            # Closing existing position
-            pos_side = position["side"]
-            if (pos_side == "long" and not is_buy) or (pos_side == "short" and is_buy):
+                pos_side = position["side"]
+                if not ((pos_side == "long" and not is_buy) or (pos_side == "short" and is_buy)):
+                    reason = f"Conflicting order for open {pos_side} position"
+                    fsm.transition_to(OrderState.REJECTED, reason)
+                    raise ValueError(f"Conflicting order side {side} for existing {pos_side} position on {symbol}.")
+                fsm.transition_to(OrderState.OPEN, "Paper market close order accepted")
                 entry_price = position["entry_price"]
                 pos_amount = position["amount"]
                 if pos_side == "long":
@@ -245,14 +278,18 @@ class PaperTrader:
                     self.balance += (entry_price * pos_amount) + pnl - fee
                 else:  # short
                     pnl = (entry_price - execution_price) * pos_amount
-                    # Short proceeds were credited when the position opened. Remove
-                    # those proceeds and settle the realized PnL, net of the close fee.
                     self.balance += pnl - fee - (entry_price * pos_amount)
                 del self.positions[symbol]
-            else:
-                raise ValueError(f"Conflicting order side {side} for existing {pos_side} position on {symbol}.")
+
+            fsm.transition_to(OrderState.FILLED, exit_reason or "Paper market order filled")
+        except Exception as exc:
+            if fsm.is_active():
+                fsm.transition_to(OrderState.FAILED, "Paper order execution failed")
+            self._record_rejected_order(fsm, str(exc))
+            raise
 
         order_record = {
+            "order_id": order_id,
             "symbol": symbol,
             "side": side,
             "amount": amount,
@@ -262,6 +299,8 @@ class PaperTrader:
             "take_profit": take_profit,
             "timestamp": datetime.now(timezone.utc),
             "status": "filled",
+            "exit_reason": exit_reason,
+            "fsm": fsm.to_dict(),
         }
         self.order_history.append(order_record)
         
@@ -286,8 +325,9 @@ class PaperTrader:
             exit_reason, price = exit_hit
             logger.warning(f"[PAPER] Position {symbol} hit {exit_reason} at price {price}.")
             close_side = "sell" if pos["side"] == "long" else "buy"
-            fill = self.execute_paper_order(symbol, close_side, pos["amount"], price)
-            fill["exit_reason"] = exit_reason
+            fill = self.execute_paper_order(
+                symbol, close_side, pos["amount"], price, exit_reason=exit_reason
+            )
             triggered_events.append(fill)
 
         return triggered_events
