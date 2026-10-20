@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import polars as pl
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from src.execution.runner import BotRunner
 from src.validation.drift import DataDriftDetector
@@ -23,6 +24,8 @@ async def test_bot_runner_single_iteration(
     mock_collector_cls: MagicMock,
     mock_primary_signal: MagicMock,
     severe_drift: bool,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     """Test BotRunner processes a symbol iteration correctly with mocked collector and model."""
     # Mock Notifier
@@ -65,6 +68,10 @@ async def test_bot_runner_single_iteration(
     mock_collector_cls.return_value = mock_collector
 
     runner = BotRunner(symbols=["BTC/USDT"], timeframe="1h", mode="PAPER", poll_interval_seconds=1, buy_threshold=0.75)
+    monkeypatch.setattr(
+        "src.execution.runner.AUTOTRAIN_SAFETY_LOCK_PATH",
+        tmp_path / "autotrain_safety_lock.json",
+    )
 
     # Test invoking process_symbol with a mock execution engine
     mock_engine = MagicMock()

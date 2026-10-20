@@ -27,6 +27,9 @@ CRITICAL_DRIFT_FEATURES = (
     "vwap_dist",
     "rsi_adaptive",
 )
+AUTOTRAIN_SAFETY_LOCK_PATH = (
+    Path(__file__).resolve().parents[2] / "models" / "saved" / "autotrain_safety_lock.json"
+)
 
 
 class BotRunner:
@@ -178,7 +181,7 @@ class BotRunner:
         if self.protective_mode.pop(symbol, False):
             logger.info(f"Protective mode cleared for {symbol}: feature distributions normalized.")
 
-        safety_lock = Path(__file__).resolve().parents[2] / "models" / "saved" / "autotrain_safety_lock.json"
+        safety_lock = AUTOTRAIN_SAFETY_LOCK_PATH
         if safety_lock.exists():
             try:
                 lock_data = json.loads(safety_lock.read_text(encoding="utf-8"))
