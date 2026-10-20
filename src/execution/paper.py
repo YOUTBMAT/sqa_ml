@@ -7,6 +7,7 @@ from uuid import uuid4
 from config.settings import settings
 from src.execution.fsm import OrderFSM, OrderState
 from src.labeling.barriers import check_bar
+from src.risk.portfolio import PortfolioManager
 from src.utils.logger import logger
 
 DATETIME_FIELDS = ("timestamp", "entry_bar_ts", "expires_at")
@@ -22,6 +23,7 @@ class PaperTrader:
         slippage_rate: float = 0.0002,
         state_dir: str = "data/paper",
         load_saved_state: bool = True,
+        portfolio_manager: PortfolioManager | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -34,6 +36,7 @@ class PaperTrader:
         self.positions: dict[str, dict] = {}
         self.order_history: list[dict] = []
         self.order_fsms: dict[str, OrderFSM] = {}
+        self.portfolio_manager = portfolio_manager
         self.peak_equity = initial_balance
         self.day_start_equity = initial_balance
         self.equity_day: str | None = None
@@ -240,6 +243,25 @@ class PaperTrader:
         try:
             if not has_pos:
                 # Opening new position
+                if self.portfolio_manager is not None:
+                    equity = self.mark_equity({})
+                    open_notional = sum(
+                        float(pos["amount"]) * float(pos["entry_price"])
+                        for pos in self.positions.values()
+                    )
+                    approved, reason = self.portfolio_manager.check_risk_limits(
+                        current_equity=equity,
+                        peak_equity=self.peak_equity,
+                        daily_pnl=(
+                            equity / self.day_start_equity - 1.0
+                            if self.day_start_equity > 0
+                            else 0.0
+                        ),
+                        total_open_exposure=open_notional + cost,
+                    )
+                    if not approved:
+                        fsm.transition_to(OrderState.REJECTED, reason)
+                        raise PermissionError(f"Paper order rejected: {reason}")
                 if is_buy:
                     total_required = cost + fee
                     if self.balance < total_required:

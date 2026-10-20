@@ -13,6 +13,7 @@ from src.features.pipeline import FeaturePipeline
 from src.labeling.barriers import atr
 from src.models.storage import ModelStorage
 from src.risk.manager import RiskManager
+from src.risk.portfolio import PortfolioManager
 from src.execution.engine import ExecutionEngine
 from src.utils.notifications import TelegramNotifier
 from src.utils.logger import logger
@@ -48,6 +49,7 @@ class BotRunner:
         self.last_processed_candle_ts: dict[str, datetime] = {}
 
         self.risk_manager = RiskManager()
+        self.portfolio_manager = PortfolioManager()
         self.notifier = TelegramNotifier()
         self.model_storage = ModelStorage()
         self.feature_pipeline = FeaturePipeline()
@@ -68,7 +70,7 @@ class BotRunner:
         logger.info(f"=== BOT RUNNER STARTED [{self.mode}] for symbols: {self.symbols} ===")
         await self.notifier.send_message(f"<b>🤖 SQA-ML BOT STARTED</b>\nMode: <b>{self.mode}</b>\nSymbols: {', '.join(self.symbols)}")
 
-        async with ExecutionEngine(mode=self.mode) as engine:
+        async with ExecutionEngine(mode=self.mode, portfolio_manager=self.portfolio_manager) as engine:
             while self.is_running:
                 for symbol in self.symbols:
                     try:
@@ -221,14 +223,21 @@ class BotRunner:
 
         if side:
             active_positions = engine.paper_trader.positions if self.mode == "PAPER" else {}
-            amount = self.risk_manager.calculate_position_size(
-                account_balance=account_balance,
-                current_price=current_price,
-                win_probability=float(p_y1),
-                reward_risk_ratio=pt_mult / sl_mult,
-                volatility=atr_value / current_price,
+            amount = self.portfolio_manager.calculate_position_size(
+                signal_prob=float(p_y1),
+                win_rate=float(p_y1),
+                win_loss_ratio=pt_mult / sl_mult,
+                current_balance=account_balance,
+                atr=atr_value,
+                price=current_price,
                 active_positions=active_positions,
             )
+            if amount <= 0:
+                logger.warning(
+                    f"PortfolioManager returned zero size for {symbol}; order suppressed "
+                    "(no positive Kelly edge or risk limit active)."
+                )
+                return
 
             sl, tp = self.risk_manager.calculate_dynamic_stops(
                 current_price, side, atr_value, sl_atr_mult=sl_mult, tp_atr_mult=pt_mult
@@ -247,6 +256,7 @@ class BotRunner:
                     take_profit=tp,
                     entry_bar_ts=latest_candle_ts,
                     expires_at=latest_candle_ts + timedelta(hours=settings.MAX_HOLD_HOURS),
+                    atr_value=atr_value,
                 )
 
                 # 6. Notifications

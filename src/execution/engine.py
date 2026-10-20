@@ -6,6 +6,7 @@ import ccxt.async_support as ccxt_async
 from config.settings import settings
 from src.execution.fsm import OrderFSM, OrderState
 from src.risk.manager import RiskManager
+from src.risk.portfolio import PortfolioManager
 from src.execution.paper import PaperTrader
 from src.utils.logger import logger
 
@@ -20,10 +21,17 @@ class ExecutionEngine:
         load_saved_state: bool = True,
         state_dir: str = "data/paper",
         is_paper: bool | None = None,
+        portfolio_manager: PortfolioManager | None = None,
     ) -> None:
         self.mode = "PAPER" if is_paper is True else mode.upper()
         self.exchange_id = exchange_id
-        self.paper_trader = PaperTrader(initial_balance=10000.0, load_saved_state=load_saved_state, state_dir=state_dir)
+        self.portfolio_manager = portfolio_manager
+        self.paper_trader = PaperTrader(
+            initial_balance=10000.0,
+            load_saved_state=load_saved_state,
+            state_dir=state_dir,
+            portfolio_manager=portfolio_manager,
+        )
         self.exchange = None
         self.order_fsms: dict[str, OrderFSM] = {}
         self.orphan_orders: dict[str, OrderFSM] = {}
@@ -58,24 +66,63 @@ class ExecutionEngine:
         risk_manager: RiskManager,
         stop_loss: float | None = None,
         take_profit: float | None = None,
-        peak_equity: float = 10000.0,
-        daily_pnl_pct: float = 0.0,
+        peak_equity: float | None = None,
+        daily_pnl_pct: float | None = None,
         current_equity: float | None = None,
         entry_bar_ts: datetime | None = None,
         expires_at: datetime | None = None,
+        atr_value: float | None = None,
     ) -> dict:
         """Validate order with RiskManager circuit breaker and route to Paper or Live exchange."""
         logger.info(f"[{self.mode}] Requesting order placement: {side.upper()} {amount} {symbol}...")
 
         # 1. Pre-trade Risk Validation (Circuit Breaker check)
-        if current_equity is None:
-            current_equity = self.paper_trader.balance if self.mode == "PAPER" else 10000.0
+        if self.mode == "PAPER":
+            if current_equity is None:
+                current_equity = self.paper_trader.mark_equity({symbol: current_price})
+            if peak_equity is None:
+                peak_equity = self.paper_trader.peak_equity
+            if daily_pnl_pct is None:
+                daily_pnl_pct = (
+                    current_equity / self.paper_trader.day_start_equity - 1.0
+                    if self.paper_trader.day_start_equity > 0
+                    else 0.0
+                )
+        else:
+            current_equity = 10000.0 if current_equity is None else current_equity
+            peak_equity = 10000.0 if peak_equity is None else peak_equity
+            daily_pnl_pct = 0.0 if daily_pnl_pct is None else daily_pnl_pct
         if not risk_manager.check_circuit_breaker(current_equity, peak_equity, daily_pnl_pct):
             logger.error(f"[{self.mode}] Order REJECTED by RiskManager Circuit Breaker.")
             raise PermissionError("Order rejected: Circuit breaker active due to drawdown limits.")
 
         if amount <= 0:
             raise ValueError("Order amount must be greater than zero.")
+
+        if self.portfolio_manager is not None:
+            positions = self.paper_trader.positions if self.mode == "PAPER" else {}
+            open_notional = sum(
+                float(position.get("amount", 0.0)) * float(position.get("entry_price", current_price))
+                for position in positions.values()
+            )
+            is_opening_position = self.mode != "PAPER" or symbol not in positions
+            proposed_exposure = open_notional + (
+                amount * current_price if is_opening_position else 0.0
+            )
+            approved, reason = self.portfolio_manager.check_risk_limits(
+                current_equity=current_equity,
+                peak_equity=peak_equity,
+                daily_pnl=daily_pnl_pct,
+                total_open_exposure=proposed_exposure,
+            )
+            if not approved:
+                raise PermissionError(f"Order rejected by PortfolioManager: {reason}")
+            if is_opening_position and atr_value is not None:
+                volatility_ok, volatility_reason = self.portfolio_manager.check_volatility(
+                    atr_value, current_price
+                )
+                if not volatility_ok:
+                    raise PermissionError(f"Order rejected by PortfolioManager: {volatility_reason}")
 
         if self.mode == "PAPER":
             order = self.paper_trader.execute_paper_order(
