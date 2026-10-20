@@ -1,8 +1,13 @@
 """Configuration management using Pydantic Settings."""
 
-import os
+from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ROOT_ENV_FILE = PROJECT_ROOT / ".env"
+CONFIG_ENV_FILE = Path(__file__).resolve().parent / ".env"
+ENV_FILE = ROOT_ENV_FILE if ROOT_ENV_FILE.is_file() else CONFIG_ENV_FILE
 
 
 class Settings(BaseSettings):
@@ -62,7 +67,7 @@ class Settings(BaseSettings):
         return self
 
     model_config = SettingsConfigDict(
-        env_file=os.path.join(os.path.dirname(__file__), ".env"),
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )

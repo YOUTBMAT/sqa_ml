@@ -243,9 +243,11 @@ class PaperTrader:
                 if pos_side == "long":
                     pnl = (execution_price - entry_price) * pos_amount
                     self.balance += (entry_price * pos_amount) + pnl - fee
-                else: # short
+                else:  # short
                     pnl = (entry_price - execution_price) * pos_amount
-                    self.balance -= (cost + fee)
+                    # Short proceeds were credited when the position opened. Remove
+                    # those proceeds and settle the realized PnL, net of the close fee.
+                    self.balance += pnl - fee - (entry_price * pos_amount)
                 del self.positions[symbol]
             else:
                 raise ValueError(f"Conflicting order side {side} for existing {pos_side} position on {symbol}.")

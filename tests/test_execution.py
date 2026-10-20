@@ -75,6 +75,31 @@ def test_mark_to_market_equity_long_and_short(tmp_path) -> None:
     assert PaperTrader(load_saved_state=True, state_dir=str(tmp_path)).peak_equity == pytest.approx(10200.0)
 
 
+def test_paper_short_pnl_symmetry(tmp_path) -> None:
+    """A short round trip books the price difference, less entry and exit fees."""
+    fee_rate = 0.001
+    trader = PaperTrader(
+        initial_balance=10000.0,
+        fee_rate=fee_rate,
+        slippage_rate=0.0,
+        load_saved_state=False,
+        state_dir=str(tmp_path),
+    )
+
+    trader.execute_paper_order("ETH/USDT", "sell", 1.0, 3000.0)
+    trader.execute_paper_order("ETH/USDT", "buy", 1.0, 2800.0)
+
+    expected_fees = (3000.0 + 2800.0) * fee_rate
+    assert trader.balance == pytest.approx(10000.0 + 200.0 - expected_fees)
+    assert not trader.has_open_position("ETH/USDT")
+
+
+def test_paper_execution_engine_does_not_initialize_ccxt(tmp_path) -> None:
+    engine = ExecutionEngine(mode="LIVE", is_paper=True, load_saved_state=False, state_dir=str(tmp_path))
+    assert engine.mode == "PAPER"
+    assert engine.exchange is None
+
+
 def test_stop_loss_gap_slippage(tmp_path) -> None:
     """Simulates a LONG position with Stop-Loss at $3000 where the next bar opens with a gap at $2900 (below stop).
     Validates that the position exits at the gap market open price ($2900) rather than the idealized stop price ($3000).

@@ -12,16 +12,26 @@ class ExecutionEngine:
     """Orchestrator for routing orders to Paper Trader or Live Exchange via CCXT."""
 
     def __init__(
-        self, mode: str = "PAPER", exchange_id: str = "binance", load_saved_state: bool = True, state_dir: str = "data/paper"
+        self,
+        mode: str = "PAPER",
+        exchange_id: str = "binance",
+        load_saved_state: bool = True,
+        state_dir: str = "data/paper",
+        is_paper: bool | None = None,
     ) -> None:
-        self.mode = mode.upper()
+        self.mode = "PAPER" if is_paper is True else mode.upper()
         self.exchange_id = exchange_id
         self.paper_trader = PaperTrader(initial_balance=10000.0, load_saved_state=load_saved_state, state_dir=state_dir)
-        
-        exchange_class = getattr(ccxt_async, exchange_id)
-        self.exchange = exchange_class({"enableRateLimit": True})
-        if settings.EXCHANGE_SANDBOX and self.exchange.has.get("sandboxMode"):
-            self.exchange.set_sandbox_mode(True)
+        self.exchange = None
+
+    def _get_exchange(self):
+        """Create the CCXT exchange only when live trading actually needs it."""
+        if self.exchange is None:
+            exchange_class = getattr(ccxt_async, self.exchange_id)
+            self.exchange = exchange_class({"enableRateLimit": True})
+            if settings.EXCHANGE_SANDBOX and self.exchange.has.get("sandboxMode"):
+                self.exchange.set_sandbox_mode(True)
+        return self.exchange
 
     async def __aenter__(self) -> "ExecutionEngine":
         return self
@@ -33,6 +43,7 @@ class ExecutionEngine:
         """Close underlying exchange HTTP session."""
         if self.exchange:
             await self.exchange.close()
+            self.exchange = None
 
     async def place_order(
         self,
@@ -86,7 +97,8 @@ class ExecutionEngine:
                 elif ccxt_side in ["short", "sell"]:
                     ccxt_side = "sell"
 
-                response = await self.exchange.create_order(
+                exchange = self._get_exchange()
+                response = await exchange.create_order(
                     symbol=symbol,
                     type=order_type,
                     side=ccxt_side,
@@ -105,7 +117,8 @@ class ExecutionEngine:
             return {"free": self.paper_trader.balance, "total": self.paper_trader.balance}
         else:
             try:
-                balance = await self.exchange.fetch_balance()
+                exchange = self._get_exchange()
+                balance = await exchange.fetch_balance()
                 return balance.get("total", {})
             except Exception as e:
                 logger.error(f"[LIVE] Failed to fetch exchange balance: {e}")
