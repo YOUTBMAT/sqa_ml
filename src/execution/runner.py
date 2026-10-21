@@ -1,7 +1,8 @@
-"""Continuous asynchronous trading bot runner executing the live/paper trading loop."""
+"""Continuous asynchronous PAPER trading bot runner."""
 
 import asyncio
 import json
+import math
 import signal
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -10,11 +11,10 @@ import polars as pl
 from config.settings import settings
 
 from src.data.collectors.crypto import CryptoCollector
-from src.data.dataset import DatasetBuilder
 from src.features.pipeline import FeaturePipeline
-from src.labeling.barriers import atr
+from src.features.storage import FeatureStorage
+from src.labeling.barriers import atr, timeframe_to_seconds
 from src.models.storage import ModelStorage
-from src.risk.manager import RiskManager
 from src.risk.portfolio import PortfolioManager
 from src.execution.engine import ExecutionEngine
 from src.utils.notifications import TelegramNotifier
@@ -43,24 +43,25 @@ class BotRunner:
         poll_interval_seconds: int = 60,
         buy_threshold: float = settings.PROB_THRESHOLD,
     ) -> None:
+        timeframe_to_seconds(timeframe)
         self.symbols = symbols
         self.timeframe = timeframe
         self.mode = mode.upper()
-        if self.mode == "LIVE":
-            raise RuntimeError("O modo LIVE esta temporariamente desativado ate a conclusao total da auditoria e re-treino do sistema.")
+        if self.mode != "PAPER":
+            raise RuntimeError("BotRunner only permits PAPER mode; LIVE execution is disabled.")
         self.poll_interval = poll_interval_seconds
         self.buy_threshold = buy_threshold
         self.is_running = False
         self.last_processed_candle_ts: dict[str, datetime] = {}
 
-        self.risk_manager = RiskManager()
         self.portfolio_manager = PortfolioManager()
         self.notifier = TelegramNotifier()
         self.model_storage = ModelStorage()
         self.feature_pipeline = FeaturePipeline()
-        self.dataset_builder = DatasetBuilder()
-        self.training_data_cache: dict[str, pl.DataFrame] = {}
+        self.feature_storage = FeatureStorage()
+        self.drift_reference_cache: dict[str, pl.DataFrame] = {}
         self.protective_mode: dict[str, bool] = {}
+        self.circuit_breaker_notified = False
 
     async def start(self) -> None:
         """Start the continuous execution loop."""
@@ -107,9 +108,13 @@ class BotRunner:
             logger.warning(f"No candles retrieved for {symbol}.")
             return
 
-        # Candle Lock & Filtering forming candle
-        current_hour_ts = now.replace(minute=0, second=0, microsecond=0)
-        df_candles = df_candles.filter(pl.col("timestamp") < current_hour_ts)
+        # Exchange timestamps identify candle opens; exclude the current incomplete interval.
+        interval_seconds = timeframe_to_seconds(self.timeframe)
+        current_bucket = datetime.fromtimestamp(
+            math.floor(now.timestamp() / interval_seconds) * interval_seconds,
+            tz=timezone.utc,
+        )
+        df_candles = df_candles.filter(pl.col("timestamp") < current_bucket)
         if df_candles.is_empty():
             logger.warning(f"No closed candles available for {symbol} after candle lock filter.")
             return
@@ -122,7 +127,7 @@ class BotRunner:
                 logger.debug(f"Position already open for {symbol}. Skipping new entry.")
                 return
 
-        # Check if new 1h candle closed
+        # Check if a new candle closed.
         latest_candle_ts = df_candles["timestamp"][-1]
         if symbol in self.last_processed_candle_ts and latest_candle_ts <= self.last_processed_candle_ts[symbol]:
             logger.debug(f"No new 1h candle closed for {symbol} (Latest: {latest_candle_ts}). Skipping iteration.")
@@ -138,19 +143,23 @@ class BotRunner:
             return
 
         # Compare a rolling live window against the feature distribution used for training.
-        reference = self.training_data_cache.get(symbol)
+        reference = self.drift_reference_cache.get(symbol)
         if reference is None:
-            reference = self.dataset_builder.load_dataset(symbol, self.timeframe)
-            self.training_data_cache[symbol] = reference
+            reference = self.feature_storage.load_features(symbol, self.timeframe)
+            self.drift_reference_cache[symbol] = reference
 
         missing_live_features = [
             feature for feature in CRITICAL_DRIFT_FEATURES if feature not in df_features.columns
         ]
-        if reference.is_empty() or missing_live_features:
+        missing_reference_features = [
+            feature for feature in CRITICAL_DRIFT_FEATURES if feature not in reference.columns
+        ]
+        if reference.is_empty() or missing_live_features or missing_reference_features:
             self.protective_mode[symbol] = True
             logger.warning(
-                f"Protective mode enabled for {symbol}: training drift reference unavailable "
-                f"or critical live features missing ({missing_live_features})."
+                f"Protective mode enabled for {symbol}: raw feature reference unavailable "
+                f"or critical features missing (live={missing_live_features}, "
+                f"reference={missing_reference_features})."
             )
             return
 
@@ -219,21 +228,15 @@ class BotRunner:
         atr_value = float(atr(pdf_candles["high"], pdf_candles["low"], pdf_candles["close"], settings.ATR_PERIOD).iloc[-1])
         pt_mult, sl_mult = settings.PT_SL_RATIO
 
-        # 4. Risk Evaluation & Sizing (2-Stage Confirmation: Primary != 0 and P(y=1) >= buy_threshold)
-        risk_state: dict = {}
-        if self.mode == "PAPER":
-            paper = engine.paper_trader
-            # ponytail: marks only this symbol's price; other open symbols are valued at entry until their own iteration
-            equity = paper.mark_equity({symbol: current_price})
-            account_balance = equity
-            risk_state = {
-                "current_equity": equity,
-                "peak_equity": paper.peak_equity,
-                "daily_pnl_pct": equity / paper.day_start_equity - 1.0 if paper.day_start_equity > 0 else 0.0,
-            }
-        else:
-            balance_info = await engine.get_account_balance()
-            account_balance = float(balance_info.get("free", 10000.0) if isinstance(balance_info, dict) else 10000.0)
+        # 4. Risk Evaluation & Sizing (2-Stage Confirmation)
+        paper = engine.paper_trader
+        equity = paper.mark_equity({symbol: current_price})
+        account_balance = equity
+        risk_state = {
+            "current_equity": equity,
+            "peak_equity": paper.peak_equity,
+            "daily_pnl_pct": equity / paper.day_start_equity - 1.0 if paper.day_start_equity > 0 else 0.0,
+        }
 
         side = None
         if latest_signal == 1 and p_y1 >= calibrated_threshold:
@@ -242,7 +245,7 @@ class BotRunner:
             side = "short"
 
         if side:
-            active_positions = engine.paper_trader.positions if self.mode == "PAPER" else {}
+            active_positions = engine.paper_trader.positions
             amount = self.portfolio_manager.calculate_position_size(
                 signal_prob=float(p_y1),
                 win_rate=float(p_y1),
@@ -259,7 +262,7 @@ class BotRunner:
                 )
                 return
 
-            sl, tp = self.risk_manager.calculate_dynamic_stops(
+            sl, tp = self.portfolio_manager.calculate_dynamic_stops(
                 current_price, side, atr_value, sl_atr_mult=sl_mult, tp_atr_mult=pt_mult
             )
 
@@ -270,7 +273,6 @@ class BotRunner:
                     side=side,
                     amount=amount,
                     current_price=current_price,
-                    risk_manager=self.risk_manager,
                     **risk_state,
                     stop_loss=sl,
                     take_profit=tp,
@@ -278,6 +280,7 @@ class BotRunner:
                     expires_at=latest_candle_ts + timedelta(hours=settings.MAX_HOLD_HOURS),
                     atr_value=atr_value,
                 )
+                self.circuit_breaker_notified = False
 
                 # 6. Notifications
                 await self.notifier.notify_order_execution(
@@ -291,11 +294,11 @@ class BotRunner:
                 )
             except PermissionError as pe:
                 logger.warning(f"Order blocked by risk management for {symbol}: {pe}")
-                if not self.risk_manager.circuit_breaker_notified:
+                if not self.circuit_breaker_notified:
                     peak = risk_state.get("peak_equity", 0.0)
                     drawdown = 1.0 - risk_state["current_equity"] / peak if peak > 0 else 0.0
                     await self.notifier.notify_circuit_breaker(str(pe), current_drawdown=drawdown)
-                    self.risk_manager.circuit_breaker_notified = True
+                    self.circuit_breaker_notified = True
             except Exception as ex:
                 logger.error(f"Failed to place order for {symbol}: {ex}")
         else:

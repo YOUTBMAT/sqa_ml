@@ -20,6 +20,7 @@ def _flat_bars(size: int, late_spike_from: int | None = None) -> pl.DataFrame:
     return pl.DataFrame(
         {
             "timestamp": [start + timedelta(hours=i) for i in range(size)],
+            "timeframe": ["1h"] * size,
             "open": close,
             "high": high,
             "low": low,
@@ -70,3 +71,21 @@ def test_conflicting_legacy_and_explicit_horizons_are_rejected() -> None:
         TripleBarrierLabeler.get_labels(
             _flat_bars(80), num_bars=12, max_holding_hours=24
         )
+
+
+def test_holding_hours_convert_to_bars_for_non_hourly_timeframes() -> None:
+    bars = _flat_bars(220).with_columns(
+        pl.Series(
+            "timestamp",
+            [
+                datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=15 * i)
+                for i in range(220)
+            ],
+        ),
+        pl.lit("15m").alias("timeframe"),
+    )
+    labels = TripleBarrierLabeler.get_labels(bars, max_holding_hours=12)
+
+    first = labels.row(0, named=True)
+    assert first["barrier_touched"] == "t1"
+    assert first["t1"] - first["timestamp"] == timedelta(hours=12)

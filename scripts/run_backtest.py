@@ -50,9 +50,10 @@ def main() -> None:
         p_y1 = model.predict_proba(df_dataset, feature_cols=meta["feature_cols"])[:, 1]
 
     sides = VectorizedBacktester.sides_from_events(bars, df_dataset, p_y1, args.threshold)
+    probabilities = VectorizedBacktester.probabilities_from_events(bars, df_dataset, p_y1)
     trades = VectorizedBacktester(
         initial_capital=args.initial_capital, fee_rate=args.fee_rate, slippage=args.slippage
-    ).run(bars, sides)
+    ).run(bars, sides, probabilities)
     bar_ts = pd.to_datetime(bars["timestamp"].to_pandas())
     if args.mode == "walk-forward":
         bar_ts = bar_ts[bar_ts >= first_scored]  # unscored rows never trade, so the period starts at the first scored event

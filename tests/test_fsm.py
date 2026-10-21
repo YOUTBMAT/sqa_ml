@@ -7,7 +7,6 @@ import pytest
 from src.execution.engine import ExecutionEngine
 from src.execution.fsm import InvalidStateTransitionError, OrderFSM, OrderState
 from src.execution.paper import PaperTrader
-from src.risk.manager import RiskManager
 
 
 def test_order_fsm_allows_valid_transitions_and_records_history() -> None:
@@ -124,71 +123,6 @@ def test_paper_trader_persists_rejected_order_fsm(tmp_path) -> None:
     assert not rejected.is_active()
 
 
-class _FakeExchange:
-    def __init__(self, response: dict) -> None:
-        self.response = response
-
-    async def create_order(self, **kwargs) -> dict:
-        return self.response
-
-
-@pytest.mark.asyncio
-async def test_execution_engine_tracks_partial_exchange_order(tmp_path) -> None:
-    engine = ExecutionEngine(mode="LIVE", load_saved_state=False, state_dir=str(tmp_path))
-    engine.exchange = _FakeExchange(
-        {"id": "exchange-1", "status": "open", "amount": 2.0, "filled": 0.5}
-    )
-
-    response = await engine.place_order(
-        "ETH/USDT",
-        "buy",
-        2.0,
-        3000.0,
-        RiskManager(),
-        current_equity=10000.0,
-        peak_equity=10000.0,
-    )
-
-    assert response["fsm_state"] == OrderState.PARTIALLY_FILLED.value
-    assert engine.order_fsms["exchange-1"].state is OrderState.PARTIALLY_FILLED
-    assert engine.order_fsms["exchange-1"].is_active()
-
-
-@pytest.mark.asyncio
-async def test_execution_engine_tracks_orphaned_exchange_response(tmp_path) -> None:
-    engine = ExecutionEngine(mode="LIVE", load_saved_state=False, state_dir=str(tmp_path))
-    engine.exchange = _FakeExchange({"status": "open"})
-
-    with pytest.raises(RuntimeError, match="order is orphaned"):
-        await engine.place_order(
-            "ETH/USDT",
-            "buy",
-            1.0,
-            3000.0,
-            RiskManager(),
-            current_equity=10000.0,
-            peak_equity=10000.0,
-        )
-
-    orphan = next(iter(engine.orphan_orders.values()))
-    assert orphan.state is OrderState.FAILED
-    assert not orphan.is_active()
-
-
-@pytest.mark.asyncio
-async def test_execution_engine_marks_unknown_exchange_status_orphaned(tmp_path) -> None:
-    engine = ExecutionEngine(mode="LIVE", load_saved_state=False, state_dir=str(tmp_path))
-    engine.exchange = _FakeExchange({"id": "exchange-unknown", "status": "unrecognized"})
-
-    with pytest.raises(RuntimeError, match="needs reconciliation"):
-        await engine.place_order(
-            "ETH/USDT",
-            "buy",
-            1.0,
-            3000.0,
-            RiskManager(),
-            current_equity=10000.0,
-            peak_equity=10000.0,
-        )
-
-    assert engine.orphan_orders["exchange-unknown"].state is OrderState.FAILED
+def test_execution_engine_rejects_live_mode_before_any_exchange_access(tmp_path) -> None:
+    with pytest.raises(RuntimeError, match="LIVE execution is disabled"):
+        ExecutionEngine(mode="LIVE", load_saved_state=False, state_dir=str(tmp_path))

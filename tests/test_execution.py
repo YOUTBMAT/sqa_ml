@@ -5,7 +5,6 @@ from datetime import datetime, timezone, timedelta
 
 from src.execution.paper import PaperTrader
 from src.execution.engine import ExecutionEngine
-from src.risk.manager import RiskManager
 
 T0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
 
@@ -57,6 +56,26 @@ def test_paper_time_barrier_closes_at_expiry_bar_close(tmp_path) -> None:
     assert events[0]["execution_price"] == pytest.approx((50000 + 24) * (1 - 0.0005))
 
 
+def test_paper_time_barrier_reason_uses_actual_expiry_duration(tmp_path) -> None:
+    trader = PaperTrader(load_saved_state=False, state_dir=str(tmp_path))
+    trader.execute_paper_order(
+        "ETH/USDT",
+        "buy",
+        0.1,
+        2_000.0,
+        stop_loss=1_000.0,
+        take_profit=3_000.0,
+        entry_bar_ts=T0,
+        expires_at=T0 + timedelta(hours=12),
+    )
+
+    events = trader.update_positions(
+        {"ETH/USDT": [_bar(12, 2_000.0, 2_100.0, 1_900.0, 2_050.0)]}
+    )
+
+    assert events[0]["exit_reason"] == "TIME_BARRIER_12H"
+
+
 def test_paper_state_round_trip_keeps_barrier_times(tmp_path) -> None:
     _long(tmp_path)
     reloaded = PaperTrader(load_saved_state=True, state_dir=str(tmp_path))
@@ -100,6 +119,11 @@ def test_paper_execution_engine_does_not_initialize_ccxt(tmp_path) -> None:
     assert engine.exchange is None
 
 
+def test_execution_engine_rejects_live_mode(tmp_path) -> None:
+    with pytest.raises(RuntimeError, match="LIVE execution is disabled"):
+        ExecutionEngine(mode="LIVE", load_saved_state=False, state_dir=str(tmp_path))
+
+
 def test_stop_loss_gap_slippage(tmp_path) -> None:
     """Simulates a LONG position with Stop-Loss at $3000 where the next bar opens with a gap at $2900 (below stop).
     Validates that the position exits at the gap market open price ($2900) rather than the idealized stop price ($3000).
@@ -121,30 +145,27 @@ def test_stop_loss_gap_slippage(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_execution_engine_risk_integration(tmp_path) -> None:
-    """Test ExecutionEngine integrates with RiskManager to block orders when circuit breaker triggers."""
+    """The PortfolioManager blocks orders when its drawdown limit is reached."""
     async with ExecutionEngine(mode="PAPER", load_saved_state=False, state_dir=str(tmp_path)) as engine:
-        risk_manager = RiskManager(max_daily_drawdown_pct=0.05)
-
         # Normal condition -> order should pass
         order = await engine.place_order(
             symbol="BTC/USDT",
             side="buy",
-            amount=0.1,
+            amount=0.01,
             current_price=50000.0,
-            risk_manager=risk_manager,
             peak_equity=10000.0,
             daily_pnl_pct=-0.01,
         )
         assert order["status"] == "filled"
 
-        # Breached condition (daily drawdown -6%) -> order should raise PermissionError
+        # Portfolio drawdown policy is enforced at the execution boundary.
         with pytest.raises(PermissionError):
             await engine.place_order(
                 symbol="BTC/USDT",
                 side="buy",
-                amount=0.1,
+                amount=0.01,
                 current_price=50000.0,
-                risk_manager=risk_manager,
                 peak_equity=10000.0,
+                current_equity=10000.0,
                 daily_pnl_pct=-0.06,
             )

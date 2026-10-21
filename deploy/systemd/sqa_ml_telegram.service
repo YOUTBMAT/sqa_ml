@@ -5,7 +5,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/youtbmat/Documentos/Coding\ Projects/sqa_ml
+WorkingDirectory=%h/.local/share/sqa_ml
 Environment="PYTHONPATH=src:config:."
 ExecStart="/home/youtbmat/Documentos/Coding Projects/sqa_ml/venv/bin/python" "scripts/send_telegram_status.py"
 StandardOutput=journal

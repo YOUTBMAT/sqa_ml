@@ -5,6 +5,8 @@ they are scanned on the following bars' open/high/low; the vertical barrier exit
 entry + max_bars.
 """
 
+from math import ceil
+import re
 from typing import NamedTuple
 
 import numpy as np
@@ -15,6 +17,23 @@ class TradeOutcome(NamedTuple):
     exit_idx: int
     exit_price: float
     barrier: str  # "tp", "sl" or "t1"
+
+
+def timeframe_to_seconds(timeframe: str) -> int:
+    """Convert a fixed-duration market timeframe such as 15m or 4h to seconds."""
+    match = re.fullmatch(r"([1-9]\d*)(m|h|d|w)", timeframe)
+    if match is None:
+        raise ValueError(f"Unsupported fixed-duration timeframe: {timeframe!r}")
+    amount = int(match.group(1))
+    unit_seconds = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+    return amount * unit_seconds[match.group(2)]
+
+
+def hours_to_bars(hours: int, timeframe: str) -> int:
+    """Convert a positive holding duration in hours into a covering number of bars."""
+    if isinstance(hours, bool) or not isinstance(hours, int) or hours < 1:
+        raise ValueError("Holding duration must be a positive integer number of hours.")
+    return ceil(hours * 3600 / timeframe_to_seconds(timeframe))
 
 
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:

@@ -82,7 +82,7 @@ async def test_bot_runner_single_iteration(
     mock_engine.paper_trader.peak_equity = 10000.0
     mock_engine.paper_trader.day_start_equity = 9800.0
 
-    runner.training_data_cache["BTC/USDT"] = pl.DataFrame(
+    runner.drift_reference_cache["BTC/USDT"] = pl.DataFrame(
         {
             "vol_parkinson": [0.1] * 20,
             "frac_diff_close": [100.0] * 20,

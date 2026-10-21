@@ -28,6 +28,7 @@ def evaluate(
     bars,
     sides: np.ndarray,
     window: np.ndarray,
+    probabilities: np.ndarray,
     bar_ts: pd.Series,
     end_timestamp: pd.Timestamp | None = None,
 ) -> dict:
@@ -38,8 +39,13 @@ def evaluate(
     end_index = len(evaluation_bars)
     evaluation_window = window[:end_index]
     evaluation_timestamps = bar_ts.iloc[:end_index]
+    evaluation_probabilities = np.where(
+        window[:end_index], probabilities[:end_index], np.nan
+    )
     trades = VectorizedBacktester().run(
-        evaluation_bars, np.where(evaluation_window, sides[:end_index], 0.0)
+        evaluation_bars,
+        np.where(evaluation_window, sides[:end_index], 0.0),
+        evaluation_probabilities,
     )
     return PerformanceMetrics.calculate_metrics(
         trades,
@@ -69,6 +75,8 @@ def main() -> int:
         help="Return a nonzero status unless calibration and holdout both show positive expectancy.",
     )
     args = parser.parse_args()
+    if not 0.0 < args.holdout < 1.0:
+        parser.error("--holdout must be strictly between 0 and 1.")
 
     logger.info("=== INITIALIZING SQA-ML THRESHOLD CALIBRATION ===")
 
@@ -102,9 +110,10 @@ def main() -> int:
     print("-" * 90)
 
     best_threshold, best_score = None, -np.inf
+    probabilities = VectorizedBacktester.probabilities_from_events(bars, df_dataset, p_y1)
     for th in THRESHOLDS:
         sides = VectorizedBacktester.sides_from_events(bars, df_dataset, p_y1, th)
-        m = evaluate(bars, sides, calib_mask, bar_ts, end_timestamp=cutoff)
+        m = evaluate(bars, sides, calib_mask, probabilities, bar_ts, end_timestamp=cutoff)
         print_row(f"{th:.2f}", m)
         score = m["sharpe_ratio"] * 0.5 + min(m["profit_factor"], 3.0) * 0.5
         if m["profit_factor"] >= 1.0 and m["total_trades"] >= 20 and score > best_score:
@@ -122,7 +131,7 @@ def main() -> int:
         return 2 if args.require_positive_holdout else 0
 
     sides = VectorizedBacktester.sides_from_events(bars, df_dataset, p_y1, best_threshold)
-    holdout = evaluate(bars, sides, hold_mask, bar_ts)
+    holdout = evaluate(bars, sides, hold_mask, probabilities, bar_ts)
     print(f"\nHOLDOUT (from {cutoff:%Y-%m-%d}, never used for selection):")
     print_row(f"{best_threshold:.2f}", holdout)
     if holdout["profit_factor"] <= 1.0 or holdout["total_return_pct"] <= 0:

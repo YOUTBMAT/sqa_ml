@@ -18,6 +18,7 @@ HOLDOUT_FRACTION = 0.30
 def _evaluate(
     bars: pl.DataFrame,
     sides: np.ndarray,
+    probabilities: np.ndarray,
     mask: np.ndarray,
     bar_timestamps: pd.Series,
     max_holding_hours: int,
@@ -32,8 +33,9 @@ def _evaluate(
     eval_length = len(eval_bars)
     eval_mask = mask[:eval_length]
     eval_timestamps = bar_timestamps.iloc[:eval_length]
-    trades = VectorizedBacktester(max_bars=max_holding_hours, pt_sl=PT_SL).run(
-        eval_bars, np.where(eval_mask, sides[:eval_length], 0.0)
+    eval_probabilities = np.where(eval_mask, probabilities[:eval_length], np.nan)
+    trades = VectorizedBacktester(max_holding_hours=max_holding_hours, pt_sl=PT_SL).run(
+        eval_bars, np.where(eval_mask, sides[:eval_length], 0.0), eval_probabilities
     )
     span = PerformanceMetrics.span_years(eval_timestamps[eval_mask])
     return PerformanceMetrics.calculate_metrics(trades, 10000.0, span)
@@ -93,7 +95,13 @@ def analyze_horizon(symbol: str, timeframe: str, max_holding_hours: int) -> dict
     for threshold in THRESHOLDS:
         sides = VectorizedBacktester.sides_from_events(features, dataset, p_y1, threshold)
         metrics = _evaluate(
-            features, sides, calibration_mask, bars_ts, max_holding_hours, end_timestamp=cutoff
+            features,
+            sides,
+            VectorizedBacktester.probabilities_from_events(features, dataset, p_y1),
+            calibration_mask,
+            bars_ts,
+            max_holding_hours,
+            end_timestamp=cutoff,
         )
         score = 0.5 * metrics["sharpe_ratio"] + 0.5 * min(metrics["profit_factor"], 3.0)
         if metrics["profit_factor"] >= 1.0 and metrics["total_trades"] >= 20 and score > best_score:
@@ -111,7 +119,14 @@ def analyze_horizon(symbol: str, timeframe: str, max_holding_hours: int) -> dict
         }
 
     sides = VectorizedBacktester.sides_from_events(features, dataset, p_y1, best_threshold)
-    holdout_metrics = _evaluate(features, sides, holdout_mask, bars_ts, max_holding_hours)
+    holdout_metrics = _evaluate(
+        features,
+        sides,
+        VectorizedBacktester.probabilities_from_events(features, dataset, p_y1),
+        holdout_mask,
+        bars_ts,
+        max_holding_hours,
+    )
     return {
         "horizon": max_holding_hours,
         "label_counts": counts,

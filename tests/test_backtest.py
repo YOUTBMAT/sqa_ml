@@ -28,18 +28,26 @@ def test_backtest_runs_on_continuous_bars_and_never_overlaps() -> None:
     bars = _bars(close)
     sides = np.zeros(len(close))
     sides[150:] = 1  # signal on every bar: trades must still be sequential
+    probabilities = np.full(len(close), 0.9)
 
     bt = VectorizedBacktester(initial_capital=10000.0, fee_rate=0.0005, slippage=0.0002)
-    trades = bt.run(bars, sides)
+    trades = bt.run(bars, sides, probabilities)
 
     assert len(trades) > 5
     assert (trades["exit_time"] > trades["entry_time"]).all()
     assert (trades["entry_time"].iloc[1:].to_numpy() >= trades["exit_time"].iloc[:-1].to_numpy()).all()
     # Holding never exceeds the 24h vertical barrier in real time.
     assert (trades["exit_time"] - trades["entry_time"]).max() <= pd.Timedelta(hours=24)
-    # Round-trip costs are charged on every trade.
-    assert np.allclose(trades["gross_return"] - trades["net_return"], 2 * (0.0005 + 0.0002))
-    assert np.isclose(trades["equity"].iloc[-1], 10000.0 * np.prod(1 + trades["net_return"]))
+    # Sized positions charge actual round-trip costs and compound dollar PnL.
+    assert (trades["fees_paid"] > 0).all()
+    assert (trades["slippage_cost"] > 0).all()
+    assert np.allclose(
+        trades["equity"].to_numpy()[1:] - trades["equity"].to_numpy()[:-1],
+        trades["net_return"].to_numpy()[1:] * trades["equity"].to_numpy()[:-1],
+    )
+    assert (
+        trades["position_notional"] <= trades["equity_before"] * 0.20 + 1e-8
+    ).all()
 
 
 def test_take_profit_trade_on_trending_bars() -> None:
@@ -47,7 +55,8 @@ def test_take_profit_trade_on_trending_bars() -> None:
     bars = _bars(close)
     sides = np.zeros(len(close))
     sides[150] = 1
-    trades = VectorizedBacktester().run(bars, sides)
+    probabilities = np.full(len(close), 0.9)
+    trades = VectorizedBacktester().run(bars, sides, probabilities)
     assert len(trades) == 1 and trades["barrier"].iloc[0] == "tp" and trades["gross_return"].iloc[0] > 0
 
 

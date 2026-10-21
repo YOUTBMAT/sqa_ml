@@ -4,11 +4,31 @@ import argparse
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from config.settings import settings
 from src.data.dataset import DatasetBuilder
 from src.features.selection import PurgedFeatureSelector
 from src.models.trainer import QuantModelTrainer
 from src.validation.cross_validation import PurgedGroupTimeSeriesSplit
+
+
+def selection_period(data: pd.DataFrame, holdout_fraction: float) -> pd.DataFrame:
+    """Limit feature selection to observations strictly before the final time holdout."""
+    if not 0.0 < holdout_fraction < 1.0:
+        raise ValueError("holdout_fraction must be strictly between 0 and 1.")
+    if "timestamp" not in data.columns or "t1" not in data.columns or data.empty:
+        raise ValueError("Feature selection data must be non-empty and contain timestamp and t1 columns.")
+    timestamps = pd.to_datetime(data["timestamp"], utc=True)
+    event_ends = pd.to_datetime(data["t1"], utc=True)
+    start, end = timestamps.min(), timestamps.max()
+    if start >= end:
+        raise ValueError("Feature selection requires at least two distinct timestamps.")
+    cutoff = start + (end - start) * (1.0 - holdout_fraction)
+    selected_period = data.loc[(timestamps < cutoff) & (event_ends < cutoff)].copy().reset_index(drop=True)
+    if selected_period.empty:
+        raise ValueError("No data remains before the reserved holdout.")
+    return selected_period
 
 
 def main() -> None:
@@ -18,6 +38,12 @@ def main() -> None:
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--embargo", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--holdout",
+        type=float,
+        default=0.3,
+        help="Final time fraction excluded from feature selection and reserved for holdout evaluation.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -35,7 +61,7 @@ def main() -> None:
     if missing:
         raise ValueError(f"Dataset is missing active model features: {missing}")
 
-    pdf = dataset.to_pandas()
+    pdf = selection_period(dataset.to_pandas(), args.holdout)
     usable = pdf[feature_cols + ["target_label", "sample_weight"]].notna().all(axis=1)
     pdf = pdf.loc[usable].reset_index(drop=True)
     X = pdf[feature_cols]

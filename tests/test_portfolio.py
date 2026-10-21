@@ -5,7 +5,6 @@ import pytest
 from src.execution.engine import ExecutionEngine
 from src.execution.paper import PaperTrader
 from src.risk.portfolio import PortfolioManager
-from src.risk.manager import RiskManager
 
 
 def test_fractional_kelly_position_size_tracks_signal_probability() -> None:
@@ -131,6 +130,63 @@ def test_paper_trader_enforces_exposure_cap_for_direct_orders(tmp_path) -> None:
     assert not trader.has_open_position("ETH/USDT")
 
 
+def test_partial_close_books_only_closed_quantity_and_retains_remainder(tmp_path) -> None:
+    trader = PaperTrader(
+        initial_balance=10_000.0,
+        fee_rate=0.001,
+        slippage_rate=0.0,
+        load_saved_state=False,
+        state_dir=str(tmp_path),
+    )
+    trader.execute_paper_order("ETH/USDT", "sell", 2.0, 3_000.0)
+    opening_balance = trader.balance
+
+    trader.execute_paper_order("ETH/USDT", "buy", 0.5, 2_800.0)
+
+    assert trader.positions["ETH/USDT"]["amount"] == pytest.approx(1.5)
+    assert trader.balance - opening_balance == pytest.approx(
+        (3_000.0 - 2_800.0) * 0.5 - (2_800.0 * 0.5 * 0.001) - (3_000.0 * 0.5)
+    )
+
+
+def test_close_order_cannot_exceed_open_position(tmp_path) -> None:
+    trader = PaperTrader(
+        initial_balance=10_000.0,
+        fee_rate=0.0,
+        slippage_rate=0.0,
+        load_saved_state=False,
+        state_dir=str(tmp_path),
+    )
+    trader.execute_paper_order("ETH/USDT", "buy", 1.0, 2_000.0)
+
+    with pytest.raises(ValueError, match="exceeds the open position"):
+        trader.execute_paper_order("ETH/USDT", "sell", 1.1, 2_100.0)
+
+    assert trader.positions["ETH/USDT"]["amount"] == pytest.approx(1.0)
+
+
+def test_portfolio_manager_calculates_atr_stops_for_long_and_short() -> None:
+    manager = PortfolioManager()
+    assert manager.calculate_dynamic_stops(100.0, "long", 2.0) == (96.0, 106.0)
+    assert manager.calculate_dynamic_stops(100.0, "short", 2.0) == (104.0, 94.0)
+
+
+def test_run_lock_is_exclusive_and_released_when_descriptor_closes(tmp_path, monkeypatch) -> None:
+    import scripts.autotrain as autotrain
+
+    lock_path = tmp_path / "autotrain_running.lock"
+    monkeypatch.setattr(autotrain, "RUN_LOCK_PATH", lock_path)
+    first = autotrain.acquire_run_lock("first")
+    assert first is not None
+    assert autotrain.acquire_run_lock("second") is None
+    import os
+
+    os.close(first)
+    second = autotrain.acquire_run_lock("second")
+    assert second is not None
+    os.close(second)
+
+
 @pytest.mark.asyncio
 async def test_execution_engine_blocks_opening_at_daily_drawdown_and_volatility(tmp_path) -> None:
     manager = PortfolioManager()
@@ -146,7 +202,6 @@ async def test_execution_engine_blocks_opening_at_daily_drawdown_and_volatility(
                 side="buy",
                 amount=0.01,
                 current_price=2_000.0,
-                risk_manager=RiskManager(),
                 daily_pnl_pct=-0.03,
                 current_equity=10_000.0,
                 peak_equity=10_000.0,
@@ -159,7 +214,6 @@ async def test_execution_engine_blocks_opening_at_daily_drawdown_and_volatility(
                 side="buy",
                 amount=0.01,
                 current_price=2_000.0,
-                risk_manager=RiskManager(),
                 daily_pnl_pct=0.0,
                 current_equity=10_000.0,
                 peak_equity=10_000.0,
@@ -184,9 +238,40 @@ async def test_execution_engine_blocks_order_over_exposure_cap(tmp_path) -> None
                 side="buy",
                 amount=1.1,
                 current_price=2_000.0,
-                risk_manager=RiskManager(),
                 current_equity=10_000.0,
                 peak_equity=10_000.0,
                 daily_pnl_pct=0.0,
             )
         assert not engine.paper_trader.has_open_position("ETH/USDT")
+
+
+@pytest.mark.asyncio
+async def test_risk_limits_never_block_closing_an_open_position(tmp_path) -> None:
+    async with ExecutionEngine(
+        mode="PAPER",
+        load_saved_state=False,
+        state_dir=str(tmp_path),
+    ) as engine:
+        await engine.place_order(
+            symbol="ETH/USDT",
+            side="buy",
+            amount=0.01,
+            current_price=2_000.0,
+            peak_equity=10_000.0,
+            current_equity=10_000.0,
+            daily_pnl_pct=0.0,
+            atr_value=20.0,
+        )
+        closing = await engine.place_order(
+            symbol="ETH/USDT",
+            side="sell",
+            amount=0.01,
+            current_price=1_940.0,
+            peak_equity=10_000.0,
+            current_equity=9_700.0,
+            daily_pnl_pct=-0.03,
+            atr_value=250.0,
+        )
+
+    assert closing["status"] == "filled"
+    assert "ETH/USDT" not in engine.paper_trader.positions

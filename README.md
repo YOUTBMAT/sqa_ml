@@ -13,13 +13,13 @@ O fluxo de pesquisa é:
 5. Treino LightGBM e avaliação por Purged Walk-Forward.
 6. Calibração de thresholds em simulação contínua, separando calibração e holdout.
 
-Na execução PAPER, o runner verifica data drift e sinal primário, consulta o modelo e delega sizing e limites ao `PortfolioManager`. O `ExecutionEngine` valida os circuit breakers antes de encaminhar ordens ao `PaperTrader`, que mantém estado, PnL, posições e ciclo de ordens.
+Na execução PAPER, o runner compara populações de features não condicionadas a eventos, consulta o modelo e delega sizing, stops e limites ao `PortfolioManager`. O `ExecutionEngine` e o `PaperTrader` aceitam somente PAPER e aplicam limites de portfólio; fechamentos parciais contabilizam apenas a quantidade encerrada.
 
 ## Componentes v2.0
 
 ### Ciclo de vida de ordens — `src/execution/fsm.py`
 
-`OrderFSM` aplica transições válidas entre `PENDING_SUBMIT`, `OPEN`, `PARTIALLY_FILLED`, `FILLED`, `CANCELING`, `EXPIRED`, `REJECTED` e `FAILED`. Registra histórico e rejeita mudanças ilegais. O engine reconcilia estados CCXT e mantém respostas desconhecidas/orfãs para investigação; Paper usa a FSM também em ordens de abertura e encerramento.
+`OrderFSM` aplica transições válidas entre `PENDING_SUBMIT`, `OPEN`, `PARTIALLY_FILLED`, `FILLED`, `CANCELING`, `EXPIRED`, `REJECTED` e `FAILED`. Registra histórico e rejeita mudanças ilegais. O engine PAPER encaminha ordens ao `PaperTrader`, que usa a FSM em ordens de abertura, encerramento e rejeição. A integração de execução LIVE/CCXT foi removida.
 
 ### Data drift por PSI — `src/validation/drift.py`
 
@@ -33,11 +33,11 @@ Na execução PAPER, o runner verifica data drift e sinal primário, consulta o 
 
 ### Seleção de features — `src/features/selection.py`
 
-`PurgedFeatureSelector` calcula Mean Decrease Accuracy como a queda da ROC AUC OOS após permutar uma feature, em folds do `PurgedGroupTimeSeriesSplit`. `scripts/select_features.py` mantém features com MDA médio positivo e grava a lista em `config/selected_features.json`. O conjunto atual contém 13 features; cada novo treino recalcula a seleção em staging antes de qualquer promoção.
+`PurgedFeatureSelector` calcula Mean Decrease Accuracy como a queda da ROC AUC OOS após permutar uma feature, em folds do `PurgedGroupTimeSeriesSplit`. `scripts/select_features.py` mantém features com MDA médio positivo e grava a lista em `config/selected_features.json`. Por padrão, a seleção exclui o período final reservado para holdout, evitando usar rótulos de holdout para escolher features. Cada novo treino recalcula a seleção em staging antes de qualquer promoção.
 
 ### Gestão de portfólio — `src/risk/portfolio.py`
 
-`PortfolioManager` transforma probabilidade e payoff em fração de Kelly, aplica um fator fracionado de segurança e normaliza por ATR/preço. Também aplica limite de exposição total, drawdown diário/global e circuit breaker de volatilidade. Configuração padrão: Kelly 0,25, drawdown diário 3%, drawdown global 15%, exposição aberta máxima 20% e bloqueio quando ATR/preço atinge 10%.
+`PortfolioManager` transforma probabilidade e payoff em fração de Kelly, aplica um fator fracionado de segurança e normaliza por ATR/preço. Também aplica limite de exposição total, drawdown diário/global, stops ATR e circuit breaker de volatilidade. O simulador contínuo usa as probabilidades OOS para o mesmo sizing e os mesmos limites de exposição. Configuração padrão: Kelly 0,25, drawdown diário 3%, drawdown global 15%, exposição aberta máxima 20% e bloqueio quando ATR/preço atinge 10%.
 
 Equações principais:
 
@@ -55,7 +55,7 @@ O runner limita `p` ao win rate observado antes de calcular Kelly; probabilidade
 
 ### Automação segura — `scripts/autotrain.py`
 
-Executa coleta OHLCV, engenharia de features, rebuild do dataset, Purged MDA, treino e calibração/holdout em sequência. O modelo, metadata e features selecionadas são produzidos em staging. O script mantém `models/saved/autotrain_safety_lock.json` ativo durante o processo e em caso de falha; a promoção e remoção do lock só ocorrem quando existe threshold calibrável e o holdout apresenta PF > 1 e retorno positivo. O runner respeita esse lock e não abre novas posições.
+Executa coleta OHLCV, engenharia de features, rebuild do dataset, Purged MDA, treino e calibração/holdout em sequência. O modelo, metadata e features selecionadas são produzidos em staging. O script mantém `models/saved/autotrain_safety_lock.json` ativo durante o processo e em caso de falha; a promoção e remoção do lock só ocorrem quando existe threshold calibrável e o holdout apresenta PF > 1 e retorno positivo. Um advisory lock do kernel evita execução concorrente e é liberado automaticamente se o processo terminar abruptamente.
 
 ## Status de validação
 
@@ -113,7 +113,7 @@ src/labeling/           Triple Barrier e pesos de amostras
 src/models/              LightGBM, validação e persistência
 src/backtest/            Simulador contínuo e métricas
 src/execution/           Runner, engine, PaperTrader e FSM
-src/risk/                RiskManager e PortfolioManager
+src/risk/                PortfolioManager e limites de risco
 src/validation/          Purged CV e detector PSI
 tests/                   Testes unitários e de regressão
 ```

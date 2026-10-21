@@ -8,6 +8,7 @@ from sklearn.linear_model import LogisticRegression
 
 from src.features.selection import PurgedFeatureSelector
 from src.models.trainer import QuantModelTrainer
+from scripts.select_features import selection_period
 
 
 class SignalOnlyClassifier(ClassifierMixin, BaseEstimator):
@@ -80,3 +81,20 @@ def test_trainer_rejects_selected_features_missing_from_dataset(tmp_path) -> Non
         QuantModelTrainer.configured_feature_cols(
             ["signal"], selected_features_path=selected_path
         )
+
+
+def test_selection_period_excludes_final_holdout_timestamps() -> None:
+    timestamps = pd.date_range("2026-01-01", periods=100, freq="h", tz="UTC")
+    dataset = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "t1": timestamps + pd.Timedelta(hours=6),
+            "feature": np.arange(100),
+        }
+    )
+
+    selected = selection_period(dataset, 0.3)
+
+    assert selected["timestamp"].max() == timestamps[63]
+    assert (selected["t1"] < timestamps[70]).all()
+    assert timestamps[70] not in set(selected["timestamp"])

@@ -21,7 +21,7 @@ def test_a_live_lock() -> None:
         BotRunner(symbols=["BTC/USDT"], mode="LIVE")
         raise AssertionError("Expected RuntimeError for LIVE mode, but none was raised.")
     except RuntimeError as e:
-        expected_msg = "O modo LIVE esta temporariamente desativado"
+        expected_msg = "LIVE execution is disabled"
         if expected_msg in str(e):
             logger.success(f"Test A PASSED: Successfully caught expected RuntimeError: {e}")
         else:

@@ -1,6 +1,7 @@
 """Virtual broker paper trading simulator with state persistence, slippage, fees, and SL/TP tracking."""
 
 import json
+import math
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
@@ -213,7 +214,12 @@ class PaperTrader:
         order_id = str(uuid4())
         fsm = OrderFSM(order_id, symbol, side, amount, current_price)
         self.order_fsms[order_id] = fsm
-        if amount <= 0 or current_price <= 0:
+        if (
+            not math.isfinite(amount)
+            or not math.isfinite(current_price)
+            or amount <= 0
+            or current_price <= 0
+        ):
             reason = "Invalid order amount or price"
             fsm.transition_to(OrderState.REJECTED, reason)
             self._record_rejected_order(fsm, reason)
@@ -292,16 +298,28 @@ class PaperTrader:
                     reason = f"Conflicting order for open {pos_side} position"
                     fsm.transition_to(OrderState.REJECTED, reason)
                     raise ValueError(f"Conflicting order side {side} for existing {pos_side} position on {symbol}.")
-                fsm.transition_to(OrderState.OPEN, "Paper market close order accepted")
                 entry_price = position["entry_price"]
-                pos_amount = position["amount"]
+                pos_amount = float(position["amount"])
+                if amount > pos_amount:
+                    reason = "Close order amount exceeds the open position."
+                    fsm.transition_to(OrderState.REJECTED, reason)
+                    raise ValueError(reason)
+                amount = min(amount, pos_amount)
+                cost = amount * execution_price
+                fee = cost * self.fee_rate
+                fsm.amount = amount
+                fsm.transition_to(OrderState.OPEN, "Paper market close order accepted")
                 if pos_side == "long":
-                    pnl = (execution_price - entry_price) * pos_amount
-                    self.balance += (entry_price * pos_amount) + pnl - fee
+                    pnl = (execution_price - entry_price) * amount
+                    self.balance += (entry_price * amount) + pnl - fee
                 else:  # short
-                    pnl = (entry_price - execution_price) * pos_amount
-                    self.balance += pnl - fee - (entry_price * pos_amount)
-                del self.positions[symbol]
+                    pnl = (entry_price - execution_price) * amount
+                    self.balance += pnl - fee - (entry_price * amount)
+                remaining_amount = pos_amount - amount
+                if remaining_amount <= max(1e-12, pos_amount * 1e-12):
+                    del self.positions[symbol]
+                else:
+                    position["amount"] = remaining_amount
 
             fsm.transition_to(OrderState.FILLED, exit_reason or "Paper market order filled")
         except Exception as exc:
@@ -374,7 +392,8 @@ class PaperTrader:
                 if hit is not None:
                     return reasons[hit[0]], hit[1]
             if expires_at is not None and bar["timestamp"] >= expires_at:
-                return "TIME_BARRIER_24H", bar["close"]
+                duration_hours = (expires_at - entry_bar_ts).total_seconds() / 3600
+                return f"TIME_BARRIER_{duration_hours:g}H", bar["close"]
         return None
 
     def get_account_summary(self) -> dict:

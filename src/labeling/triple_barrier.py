@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from config.settings import settings
-from src.labeling.barriers import atr, simulate_trade
+from src.labeling.barriers import atr, hours_to_bars, simulate_trade
 from src.utils.logger import logger
 
 
@@ -70,6 +70,12 @@ class TripleBarrierLabeler:
 
         pdf = df.sort("timestamp").to_pandas()
         pdf["timestamp"] = pd.to_datetime(pdf["timestamp"])
+        timeframe = str(pdf["timeframe"].iloc[0]) if "timeframe" in pdf.columns else "1h"
+        max_bars = (
+            num_bars
+            if max_holding_hours is None and num_bars is not None
+            else hours_to_bars(holding_hours, timeframe)
+        )
         open_, high, low, close = (pdf[c].to_numpy(dtype=float) for c in ("open", "high", "low", "close"))
         atr_values = atr(pdf["high"], pdf["low"], pdf["close"], settings.ATR_PERIOD).to_numpy()
         signals = cls.get_primary_signal(pdf).to_numpy()
@@ -80,7 +86,7 @@ class TripleBarrierLabeler:
             if not np.isfinite(atr_values[i]) or atr_values[i] <= 0:
                 continue
             outcome = simulate_trade(
-                open_, high, low, close, i, int(signals[i]), atr_values[i], pt_mult, sl_mult, holding_hours
+                open_, high, low, close, i, int(signals[i]), atr_values[i], pt_mult, sl_mult, max_bars
             )
             if outcome is None:
                 continue  # data ends before the barrier resolves: label unknown

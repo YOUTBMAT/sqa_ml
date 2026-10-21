@@ -139,3 +139,23 @@ class PortfolioManager:
             logger.warning(reason)
             return False, reason
         return True, "Volatility within configured limit."
+
+    @staticmethod
+    def calculate_dynamic_stops(
+        current_price: float,
+        position_side: str,
+        atr: float,
+        sl_atr_mult: float = 2.0,
+        tp_atr_mult: float = 3.0,
+    ) -> tuple[float, float]:
+        """Calculate ATR-based stop-loss and take-profit prices."""
+        if not all(math.isfinite(value) for value in (current_price, atr, sl_atr_mult, tp_atr_mult)):
+            raise ValueError("Price, ATR, and barrier multipliers must be finite.")
+        if current_price <= 0 or atr <= 0 or sl_atr_mult <= 0 or tp_atr_mult <= 0:
+            raise ValueError("Price, ATR, and barrier multipliers must be positive.")
+        side = position_side.lower()
+        if side == "long":
+            return current_price - atr * sl_atr_mult, current_price + atr * tp_atr_mult
+        if side == "short":
+            return current_price + atr * sl_atr_mult, current_price - atr * tp_atr_mult
+        raise ValueError(f"Invalid position side: {position_side}. Expected 'long' or 'short'.")

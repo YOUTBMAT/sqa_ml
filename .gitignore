@@ -24,6 +24,7 @@ data/backtest_results/*.parquet
 models/saved/*.joblib
 models/saved/*.pkl
 models/saved/*_lock.json
+models/saved/*_running.lock
 
 # Logs e Arquivos de Sistema
 *.log

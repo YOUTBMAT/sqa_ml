@@ -1,4 +1,4 @@
-"""CLI script for launching the SQA-ML automated live/paper trading bot runner."""
+"""CLI script for launching the SQA-ML automated PAPER trading bot runner."""
 
 import argparse
 import asyncio
@@ -11,7 +11,7 @@ from src.utils.logger import logger
 
 def main() -> None:
     """Parse CLI arguments and start BotRunner."""
-    parser = argparse.ArgumentParser(description="SQA-ML Automated Live/Paper Trading Bot CLI")
+    parser = argparse.ArgumentParser(description="SQA-ML Automated PAPER Trading Bot CLI")
     parser.add_argument(
         "--symbols",
         nargs="+",
@@ -27,9 +27,9 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["PAPER", "LIVE"],
+        choices=["PAPER"],
         default="PAPER",
-        help="Execution mode: PAPER or LIVE",
+        help="Execution mode (PAPER only; LIVE is disabled)",
     )
     parser.add_argument(
         "--poll-interval",
@@ -46,10 +46,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.mode.upper() == "LIVE":
-        raise RuntimeError("O modo LIVE esta temporariamente desativado ate a conclusao total da auditoria e re-treino do sistema.")
-
-    logger.info("=== INITIALIZING SQA-ML LIVE/PAPER BOT CLI ===")
+    logger.info("=== INITIALIZING SQA-ML PAPER BOT CLI ===")
 
     runner = BotRunner(
         symbols=args.symbols,

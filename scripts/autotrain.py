@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import fcntl
 import json
 import math
 import os
@@ -33,6 +34,21 @@ def set_safety_lock(reason: str) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, LOCK_PATH)
+
+
+def acquire_run_lock(run_id: str) -> int | None:
+    """Acquire a kernel-released lock so crashes cannot leave a stale running marker."""
+    RUN_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(RUN_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    os.ftruncate(descriptor, 0)
+    os.write(descriptor, json.dumps({"pid": os.getpid(), "run_id": run_id}).encode("utf-8"))
+    os.fsync(descriptor)
+    return descriptor
 
 
 async def download_and_build_features(symbol: str, timeframe: str, days: int, exchange_id: str) -> int:
@@ -139,14 +155,10 @@ def main() -> int:
         part for part in (str(PROJECT_ROOT), existing_pythonpath) if part
     )
 
-    RUN_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        run_lock_fd = os.open(RUN_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
+    run_lock_fd = acquire_run_lock(run_id)
+    if run_lock_fd is None:
         logger.error(f"Autotrain already running (lock: {RUN_LOCK_PATH}); refusing concurrent run.")
         return 1
-    with os.fdopen(run_lock_fd, "w", encoding="utf-8") as lock_file:
-        lock_file.write(run_id + "\n")
 
     try:
         set_safety_lock("Automated retraining/calibration is in progress.")
@@ -208,7 +220,7 @@ def main() -> int:
         return 1
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
-        RUN_LOCK_PATH.unlink(missing_ok=True)
+        os.close(run_lock_fd)
 
 
 if __name__ == "__main__":
