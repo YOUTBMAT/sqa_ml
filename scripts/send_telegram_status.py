@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
@@ -86,7 +87,7 @@ def get_psi_status() -> str:
 def markdown_escape(value: object) -> str:
     """Escape dynamic text for Telegram MarkdownV2."""
     text = str(value)
-    special = "_*[]()~`>#+-=|{}.!"
+    special = "\\_*[]()~`>#+-=|{}.!"
     return "".join(f"\\{char}" if char in special else char for char in text)
 
 
@@ -123,14 +124,14 @@ def format_status_message(
         "*Portfolio*",
         f"• Initial balance: `${initial_balance:,.2f}`",
         f"• Current balance: `${balance:,.2f}`",
-        f"• Accumulated PnL: *{pnl_pct:+.2f}%*",
+        f"• Accumulated PnL: *{markdown_escape(f'{pnl_pct:+.2f}%')}*",
         "",
         "*System*",
         f"• Bot service: {markdown_escape(service_status)}",
         f"• PSI status: {markdown_escape(psi_status)}",
         f"• Safety lock: {markdown_escape(lock_status)}",
         "",
-        f"*Open positions ({len(positions)})*",
+        f"*Open positions \\({len(positions)}\\)*",
     ]
     if positions:
         for symbol, position in positions.items():
@@ -159,8 +160,13 @@ def send_message(token: str, chat_id: str, text: str) -> None:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=15) as response:
+        with urlopen(request, timeout=45) as response:
             result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Telegram status report request failed: HTTP {exc.code}: {detail}"
+        ) from exc
     except Exception as exc:
         raise RuntimeError(f"Telegram status report request failed: {exc}") from exc
     if not isinstance(result, dict) or result.get("ok") is not True:

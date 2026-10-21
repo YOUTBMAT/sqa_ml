@@ -21,7 +21,7 @@ def test_status_message_reports_balance_lock_and_open_positions() -> None:
         {"active": True, "reason": "holdout failed"},
     )
 
-    assert "Accumulated PnL: *+5.00%*" in message
+    assert "Accumulated PnL: *\\+5\\.00%*" in message
     assert "Safety lock: ACTIVE" in message
     assert "ETH/USDT" in message
     assert "amount 0\\.5" in message
