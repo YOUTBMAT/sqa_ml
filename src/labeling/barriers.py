@@ -1,11 +1,10 @@
-"""Single source of truth for triple-barrier geometry, shared by labeling, backtest and paper execution.
+"""Single source of truth for triple-barrier geometry.
 
-Convention: entry at the close of the signal bar; horizontal barriers sit at entry +/- mult * ATR(signal bar);
-they are scanned on the following bars' open/high/low; the vertical barrier exits at the close of bar
-entry + max_bars.
+Convention: entry at the close of the signal bar; horizontal barriers sit at
+entry +/- mult * ATR(signal bar); they are scanned on subsequent available
+bars. The vertical barrier is defined by elapsed timestamp duration.
 """
 
-from math import ceil
 import re
 from typing import NamedTuple
 
@@ -27,13 +26,6 @@ def timeframe_to_seconds(timeframe: str) -> int:
     amount = int(match.group(1))
     unit_seconds = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
     return amount * unit_seconds[match.group(2)]
-
-
-def hours_to_bars(hours: int, timeframe: str) -> int:
-    """Convert a positive holding duration in hours into a covering number of bars."""
-    if isinstance(hours, bool) or not isinstance(hours, int) or hours < 1:
-        raise ValueError("Holding duration must be a positive integer number of hours.")
-    return ceil(hours * 3600 / timeframe_to_seconds(timeframe))
 
 
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
@@ -81,18 +73,62 @@ def simulate_trade(
     atr_value: float,
     pt_mult: float,
     sl_mult: float,
-    max_bars: int,
+    max_holding_hours: int,
+    timestamps: pd.Series | np.ndarray | None = None,
 ) -> TradeOutcome | None:
-    """Simulate one trade entered at close[entry_idx].
+    """Simulate one trade using an elapsed-time vertical barrier.
 
-    Returns None when the data ends before any barrier is resolved (outcome unknown).
+    The first available bar whose timestamp is at or after
+    ``entry_timestamp + max_holding_hours`` is the vertical-barrier bar.
+    Missing bars therefore extend the index distance, but never extend the
+    real-time holding period.
+
+    ``timestamps`` must contain the timestamp associated with each price.
     """
-    take_profit, stop_loss = barrier_prices(close[entry_idx], atr_value, side, pt_mult, sl_mult)
-    last_idx = entry_idx + max_bars
-    for j in range(entry_idx + 1, min(last_idx, len(close) - 1) + 1):
-        hit = check_bar(side, take_profit, stop_loss, open_[j], high[j], low[j])
+    if max_holding_hours < 1:
+        raise ValueError("max_holding_hours must be positive.")
+    if isinstance(max_holding_hours, bool) or not isinstance(max_holding_hours, int):
+        raise ValueError("max_holding_hours must be a positive integer.")
+
+    if timestamps is None:
+        # Backwards-compatible test/helper path; production callers must pass
+        # the market timestamps so elapsed time reflects actual data gaps.
+        timestamp_values = pd.date_range(
+            "1970-01-01", periods=len(close), freq="h"
+        )
+    else:
+        timestamp_values = pd.DatetimeIndex(pd.to_datetime(np.asarray(timestamps)))
+    if len(timestamp_values) != len(close):
+        raise ValueError("timestamps must have the same length as the price arrays.")
+    if entry_idx < 0 or entry_idx >= len(close):
+        raise IndexError("entry_idx is outside the price arrays.")
+    if not timestamp_values.is_monotonic_increasing:
+        raise ValueError("timestamps must be sorted in ascending order.")
+
+    take_profit, stop_loss = barrier_prices(
+        close[entry_idx], atr_value, side, pt_mult, sl_mult
+    )
+    vertical_deadline = timestamp_values[entry_idx] + pd.Timedelta(
+        hours=max_holding_hours
+    )
+
+    expiry_idx = timestamp_values.searchsorted(vertical_deadline, side="left")
+    if expiry_idx <= entry_idx:
+        expiry_idx = entry_idx + 1
+
+    for j in range(entry_idx + 1, min(expiry_idx, len(close))):
+        hit = check_bar(
+            side,
+            take_profit,
+            stop_loss,
+            open_[j],
+            high[j],
+            low[j],
+        )
         if hit is not None:
             return TradeOutcome(j, float(hit[1]), hit[0])
-    if last_idx < len(close):
-        return TradeOutcome(last_idx, float(close[last_idx]), "t1")
+
+    if expiry_idx < len(close):
+        return TradeOutcome(expiry_idx, float(close[expiry_idx]), "t1")
+
     return None

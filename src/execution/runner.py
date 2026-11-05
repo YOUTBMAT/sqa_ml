@@ -54,7 +54,9 @@ class BotRunner:
         self.is_running = False
         self.last_processed_candle_ts: dict[str, datetime] = {}
 
-        self.portfolio_manager = PortfolioManager()
+        self.portfolio_manager = PortfolioManager(
+            risk_per_trade_pct=settings.RISK_PER_TRADE_PCT
+        )
         self.notifier = TelegramNotifier()
         self.model_storage = ModelStorage()
         self.feature_pipeline = FeaturePipeline()
@@ -209,6 +211,9 @@ class BotRunner:
             model, meta = self.model_storage.load_model(symbol, self.timeframe)
             feature_cols = meta.get("feature_cols", [])
             calibrated_threshold = float(meta.get("calibrated_threshold", self.buy_threshold))
+            calibrated_win_rate = float(
+                meta.get("calibrated_win_rate", settings.CALIBRATED_WIN_RATE)
+            )
         except Exception:
             logger.warning(f"No trained model found for {symbol} ({self.timeframe}). Skipping prediction.")
             return
@@ -248,12 +253,13 @@ class BotRunner:
             active_positions = engine.paper_trader.positions
             amount = self.portfolio_manager.calculate_position_size(
                 signal_prob=float(p_y1),
-                win_rate=float(p_y1),
+                win_rate=calibrated_win_rate,
                 win_loss_ratio=pt_mult / sl_mult,
                 current_balance=account_balance,
                 atr=atr_value,
                 price=current_price,
                 active_positions=active_positions,
+                stop_distance=atr_value * sl_mult,
             )
             if amount <= 0:
                 logger.warning(

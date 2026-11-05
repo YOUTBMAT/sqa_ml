@@ -13,7 +13,12 @@ from src.features.storage import FeatureStorage
 from src.utils.logger import logger
 
 
-def fetch_candles_from_db(symbol: str, timeframe: str, limit_days: int | None = None) -> pl.DataFrame:
+def fetch_candles_from_db(
+    symbol: str,
+    timeframe: str,
+    limit_days: int | None = None,
+    chunk_size: int = 10_000,
+):
     """Fetch OHLCV candles from TimescaleDB for a given symbol and timeframe."""
     logger.info(f"Fetching candles for {symbol} ({timeframe}) from database...")
     
@@ -34,19 +39,24 @@ def fetch_candles_from_db(symbol: str, timeframe: str, limit_days: int | None = 
     try:
         with get_db_session() as session:
             result = session.execute(text(query_str), params)
-            rows = result.fetchall()
-            if not rows:
+            total_rows = 0
+            yielded = False
+            while True:
+                rows = result.fetchmany(chunk_size)
+                if not rows:
+                    break
+                yielded = True
+                data = [dict(row._mapping) for row in rows]
+                chunk = pl.DataFrame(data)
+                total_rows += len(chunk)
+                yield chunk
+            if not yielded:
                 logger.warning(f"No records found in database for {symbol} ({timeframe}).")
-                return pl.DataFrame()
-
-            # Convert to Polars DataFrame
-            data = [dict(row._mapping) for row in rows]
-            df = pl.DataFrame(data)
-            logger.success(f"Fetched {len(df)} candles from database for {symbol}.")
-            return df
+            else:
+                logger.success(f"Fetched {total_rows} candles from database for {symbol}.")
     except Exception as e:
         logger.error(f"Failed to fetch candles from database for {symbol}: {e}")
-        return pl.DataFrame()
+        raise
 
 
 def main() -> None:
@@ -94,18 +104,31 @@ def main() -> None:
 
     for symbol in args.symbols:
         logger.info(f"Processing features for symbol: {symbol} ({args.timeframe})")
-        df_candles = fetch_candles_from_db(symbol, args.timeframe, limit_days=args.limit_days)
+        chunks = fetch_candles_from_db(symbol, args.timeframe, limit_days=args.limit_days)
+        processed_chunks = []
+        history = pl.DataFrame()
+        last_timestamp = None
+        for df_candles in chunks:
+            if df_candles.is_empty():
+                continue
+            combined = (
+                pl.concat([history, df_candles], how="vertical_relaxed")
+                if not history.is_empty()
+                else df_candles
+            )
+            processed = pipeline.run(combined)
+            if last_timestamp is not None:
+                processed = processed.filter(pl.col("timestamp") > last_timestamp)
+            if not processed.is_empty():
+                processed_chunks.append(processed)
+                last_timestamp = processed["timestamp"].max()
+            history = combined.tail(250)
 
-        if df_candles.is_empty():
+        if not processed_chunks:
             logger.warning(f"Skipping {symbol}: No candle data available.")
             continue
 
-        # Run feature pipeline
-        df_features = pipeline.run(df_candles)
-
-        if df_features.is_empty():
-            logger.warning(f"Skipping {symbol}: Feature pipeline returned empty DataFrame.")
-            continue
+        df_features = pl.concat(processed_chunks, how="vertical_relaxed")
 
         # Save to Parquet
         storage.save_features(df_features, symbol, args.timeframe)

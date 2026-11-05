@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 import yfinance as yf
 import polars as pl
+import pandas as pd
 
 from src.data.collectors.base import BaseCollector
 from src.utils.logger import logger
@@ -52,7 +53,7 @@ class StockCollector(BaseCollector):
             # Reset index to make Date/Datetime a column
             df_pd = df_pd.reset_index()
             # Handle multi-index columns if returned by yfinance
-            if isinstance(df_pd.columns, pl.MultiIndex) or hasattr(df_pd.columns, "levels"):
+            if isinstance(df_pd.columns, pd.MultiIndex) or hasattr(df_pd.columns, "levels"):
                 df_pd.columns = [col[0] for col in df_pd.columns]
 
             # Rename columns to standard
@@ -111,7 +112,11 @@ class StockCollector(BaseCollector):
         # Standardize schema & types
         df = df.with_columns(
             [
-                pl.col("timestamp").dt.replace_time_zone("UTC").alias("timestamp"),
+                (
+                    pl.col("timestamp").dt.replace_time_zone("UTC")
+                    if df.schema["timestamp"].time_zone is None
+                    else pl.col("timestamp").dt.convert_time_zone("UTC")
+                ).alias("timestamp"),
                 pl.lit(symbol).alias("symbol"),
                 pl.lit("STOCK").alias("asset_class"),
                 pl.lit(timeframe).alias("timeframe"),
@@ -137,6 +142,17 @@ class StockCollector(BaseCollector):
             ]
         )
 
+        timestamps = df["timestamp"].to_list()
+        if len(timestamps) > 1:
+            expected = _timeframe_duration(timeframe)
+            if expected is not None:
+                gaps = sum(
+                    timestamps[i] - timestamps[i - 1] > expected
+                    for i in range(1, len(timestamps))
+                )
+                if gaps:
+                    logger.warning(f"Detected {gaps} temporal gaps for {symbol} ({timeframe}).")
+
         logger.success(f"Fetched {len(df)} stock candles for {symbol}")
         return df
 
@@ -150,3 +166,15 @@ class StockCollector(BaseCollector):
                 "metric_value": pl.Float64,
             }
         )
+
+
+def _timeframe_duration(timeframe: str):
+    from datetime import timedelta
+
+    units = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if not timeframe or timeframe[-1].lower() not in units:
+        return None
+    try:
+        return timedelta(seconds=int(timeframe[:-1]) * units[timeframe[-1].lower()])
+    except ValueError:
+        return None

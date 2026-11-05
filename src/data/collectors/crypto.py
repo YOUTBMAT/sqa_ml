@@ -5,6 +5,7 @@ import ccxt.async_support as ccxt_async
 import polars as pl
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from config.settings import settings
 from src.data.collectors.base import BaseCollector
 from src.utils.logger import logger
 
@@ -12,7 +13,16 @@ from src.utils.logger import logger
 class CryptoCollector(BaseCollector):
     """Collector for cryptocurrency markets utilizing CCXT Async."""
 
-    def __init__(self, exchange_id: str = "binance", sandbox: bool = False, default_type: str = "spot") -> None:
+    def __init__(
+        self,
+        exchange_id: str | None = None,
+        sandbox: bool | None = None,
+        default_type: str = "spot",
+    ) -> None:
+        exchange_id = exchange_id or settings.DEFAULT_EXCHANGE
+        sandbox = settings.EXCHANGE_SANDBOX if sandbox is None else sandbox
+        if not isinstance(sandbox, bool):
+            raise ValueError("sandbox must be a boolean.")
         self.exchange_id = exchange_id
         self.sandbox = sandbox
         exchange_class = getattr(ccxt_async, exchange_id)
@@ -26,8 +36,16 @@ class CryptoCollector(BaseCollector):
                 "options": {"defaultType": default_type},
             }
         )
-        if sandbox and self.exchange.has.get("sandboxMode"):
+        if sandbox:
+            if not self.exchange.has.get("sandboxMode"):
+                raise RuntimeError(
+                    f"Exchange {exchange_id!r} does not support sandbox mode."
+                )
             self.exchange.set_sandbox_mode(True)
+        elif settings.ENVIRONMENT.lower() != "production":
+            raise RuntimeError(
+                "Live exchange access requires ENVIRONMENT=production."
+            )
 
     async def __aenter__(self) -> "CryptoCollector":
         if not self.exchange.markets:

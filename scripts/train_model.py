@@ -4,6 +4,8 @@ import argparse
 import sys
 from datetime import datetime, timezone
 
+import polars as pl
+
 from config.settings import settings
 from src.data.dataset import DatasetBuilder
 from src.models.trainer import QuantModelTrainer
@@ -80,6 +82,9 @@ def main() -> None:
         "feature_cols": feature_cols,
         "in_sample_metrics": metrics,
         "oos_roc_auc": float(oos_auc),
+        "calibrated_win_rate": float(
+            df_dataset["target_label"].cast(pl.Float64).mean()
+        ),
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "n_samples": len(df_dataset),
     }

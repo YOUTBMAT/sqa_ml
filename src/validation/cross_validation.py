@@ -11,6 +11,10 @@ class PurgedGroupTimeSeriesSplit:
     """Time series cross-validation with purging and embargoing to prevent leakage."""
 
     def __init__(self, n_splits: int = 5, pct_embargo: float = 0.01) -> None:
+        if n_splits < 2:
+            raise ValueError("n_splits must be at least 2.")
+        if not 0 <= pct_embargo < 1:
+            raise ValueError("pct_embargo must be in [0, 1).")
         self.n_splits = n_splits
         self.pct_embargo = pct_embargo
 
@@ -61,14 +65,16 @@ class PurgedGroupTimeSeriesSplit:
             purge_train_idx = train_idx[purge_mask]
             train_idx = np.setdiff1d(train_idx, purge_train_idx)
 
-            # 3. Embargo (if pct_embargo > 0)
-            if self.pct_embargo > 0 and len(train_idx) > 0 and len(test_idx) > 0:
-                embargo_val = int(len(X) * self.pct_embargo)
-                test_max_pos = test_idx[-1]
-                embargo_end_pos = min(test_max_pos + embargo_val, len(X))
-                embargo_mask = (train_idx > test_max_pos) & (train_idx <= embargo_end_pos)
-                embargo_train_idx = train_idx[embargo_mask]
-                train_idx = np.setdiff1d(train_idx, embargo_train_idx)
+            # 3. Explicit temporal embargo immediately before the test window.
+            # This creates a real time gap between the latest training event and
+            # the validation period, even though the walk-forward train set only
+            # contains observations before the test window.
+            if self.pct_embargo > 0 and len(train_idx) > 0:
+                history_start = t0.iloc[0]
+                history_end = t0.iloc[-1]
+                embargo_delta = (history_end - history_start) * self.pct_embargo
+                embargo_start = test_start - embargo_delta
+                train_idx = train_idx[t0.iloc[train_idx].to_numpy() < embargo_start]
 
             logger.info(
                 f"Fold {i+1}/{self.n_splits}: Test size = {len(test_idx)}, "

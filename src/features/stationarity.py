@@ -51,11 +51,9 @@ class StationarityTransformer:
             logger.warning("Series length is shorter than fractional differentiation window size.")
             return np.full_like(series, np.nan)
 
-        # 2. Apply weights via convolution / dot product
+        # 2. Apply the finite convolution in NumPy instead of a Python loop.
         res = np.full_like(series, np.nan)
-        for i in range(drop - 1, len(series)):
-            window = series[i - drop + 1 : i + 1]
-            res[i] = np.dot(weights, window)
+        res[drop - 1 :] = np.convolve(series, weights, mode="valid")
 
         return res
 

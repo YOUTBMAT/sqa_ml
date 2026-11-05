@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from config.settings import settings
-from src.labeling.barriers import atr, hours_to_bars, simulate_trade, timeframe_to_seconds
+from src.labeling.barriers import atr, simulate_trade, timeframe_to_seconds
 from src.risk.portfolio import PortfolioManager
 from src.utils.logger import logger
 
@@ -24,18 +24,16 @@ class VectorizedBacktester:
         fee_rate: float = 0.0005,
         slippage: float = 0.0002,
         pt_sl: list[float] | None = None,
-        max_bars: int | None = None,
         max_holding_hours: int | None = None,
     ) -> None:
-        if max_bars is not None and max_holding_hours is not None:
-            raise ValueError("Specify max_bars or max_holding_hours, not both.")
         self.initial_capital = initial_capital
         self.fee_rate = fee_rate
         self.slippage = slippage
         self.pt_mult, self.sl_mult = pt_sl or settings.PT_SL_RATIO
-        self.max_bars = max_bars
         self.max_holding_hours = max_holding_hours
-        self.portfolio_manager = PortfolioManager()
+        self.portfolio_manager = PortfolioManager(
+            risk_per_trade_pct=settings.RISK_PER_TRADE_PCT
+        )
 
     @staticmethod
     def sides_from_events(
@@ -81,17 +79,16 @@ class VectorizedBacktester:
         atr_values = atr(pdf["high"], pdf["low"], pdf["close"], settings.ATR_PERIOD).to_numpy()
         timestamps = pd.to_datetime(pdf["timestamp"])
         timeframe = str(bars["timeframe"][0]) if "timeframe" in bars.columns else "1h"
-        max_bars = (
-            self.max_bars
-            if self.max_bars is not None
-            else hours_to_bars(self.max_holding_hours or settings.MAX_HOLD_HOURS, timeframe)
-        )
+        max_holding_hours = self.max_holding_hours or settings.MAX_HOLD_HOURS
         timeframe_to_seconds(timeframe)
 
         equity = self.initial_capital
         peak_equity = equity
         day_start_equity = equity
         equity_day = None
+        historical_wins = 0
+        historical_trades = 0
+        calibrated_win_rate = settings.CALIBRATED_WIN_RATE
         trades = []
         i = 0
         while i < len(close):
@@ -108,11 +105,12 @@ class VectorizedBacktester:
                 day_start_equity = equity
             amount = self.portfolio_manager.calculate_position_size(
                 signal_prob=probability,
-                win_rate=probability,
+                win_rate=calibrated_win_rate,
                 win_loss_ratio=self.pt_mult / self.sl_mult,
                 current_balance=equity,
                 atr=float(atr_values[i]),
                 price=float(close[i]),
+                stop_distance=float(atr_values[i]) * self.sl_mult,
             )
             if amount <= 0:
                 i += 1
@@ -131,7 +129,17 @@ class VectorizedBacktester:
                 i += 1
                 continue
             outcome = simulate_trade(
-                open_, high, low, close, i, side, atr_values[i], self.pt_mult, self.sl_mult, max_bars
+                open_,
+                high,
+                low,
+                close,
+                i,
+                side,
+                atr_values[i],
+                self.pt_mult,
+                self.sl_mult,
+                max_holding_hours=max_holding_hours,
+                timestamps=timestamps,
             )
             if outcome is None:
                 break  # data ends before the trade resolves
@@ -145,6 +153,14 @@ class VectorizedBacktester:
             )
             net_pnl = gross_pnl - fees
             net = net_pnl / equity
+            historical_trades += 1
+            if gross > 0:
+                historical_wins += 1
+            calibrated_win_rate = (
+                historical_wins / historical_trades
+                if historical_trades >= 10
+                else settings.CALIBRATED_WIN_RATE
+            )
             equity_before = equity
             equity += net_pnl
             peak_equity = max(peak_equity, equity)
@@ -157,7 +173,36 @@ class VectorizedBacktester:
             )
             i = outcome.exit_idx
 
+        trade_df = pd.DataFrame(trades, columns=TRADE_COLUMNS)
+        equity_curve = pd.Series(
+            self.initial_capital,
+            index=timestamps,
+            dtype=float,
+            name="equity",
+        )
+        for trade in trades:
+            entry_ts, exit_ts = trade[0], trade[1]
+            entry_idx = int(timestamps.searchsorted(entry_ts, side="left"))
+            exit_idx = int(timestamps.searchsorted(exit_ts, side="left"))
+            if entry_idx >= len(equity_curve):
+                continue
+            exit_idx = min(exit_idx, len(equity_curve) - 1)
+            entry_fill = trade[3] * (1.0 + trade[2] * self.slippage)
+            entry_fee = abs(entry_fill * trade[10]) * self.fee_rate
+            entry_slippage = abs(entry_fill - trade[3]) * trade[10]
+            marked = (
+                trade[12]
+                - entry_fee
+                - entry_slippage
+                + trade[10] * (close[entry_idx : exit_idx + 1] - entry_fill) * trade[2]
+            )
+            equity_curve.iloc[entry_idx : exit_idx + 1] = marked
+            equity_curve.iloc[exit_idx] = trade[13]
+            if exit_idx + 1 < len(equity_curve):
+                equity_curve.iloc[exit_idx + 1 :] = trade[13]
+        trade_df.attrs["equity_curve"] = equity_curve
+
         durations = [(t[1] - t[0]).total_seconds() / 3600 for t in trades]
         median_duration = float(np.median(durations)) if durations else 0.0
         logger.success(f"Backtest completed. Total trades: {len(trades)}, Median duration: {median_duration:.1f}h")
-        return pd.DataFrame(trades, columns=TRADE_COLUMNS)
+        return trade_df

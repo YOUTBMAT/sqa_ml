@@ -32,16 +32,13 @@ class FeaturePipeline:
 
         logger.info(f"Running FeaturePipeline on {len(df)} rows...")
 
-        # 0. Cast numeric columns explicitly to Float64 and fill trades_count nulls
+        # 0. Cast numeric columns explicitly to Float64 without changing source counts.
         numeric_cols = ["open", "high", "low", "close", "volume"]
         cast_exprs = [
             pl.col(c).cast(pl.Float64) for c in numeric_cols if c in df.columns
         ]
         if cast_exprs:
             df = df.with_columns(cast_exprs)
-
-        if "trades_count" in df.columns:
-            df = df.with_columns(pl.col("trades_count").fill_null(0))
 
         # 1. Stationarity: Log returns & Rolling Z-Score
         df = StationarityTransformer.log_returns(df, price_col="close", output_col="log_return")
@@ -97,6 +94,20 @@ class FeaturePipeline:
                 for col in new_feature_cols
             ]
         )
+
+        # Reject invalid numeric values in every numeric column. Null trade counts are
+        # legitimate for providers that do not publish transaction counts.
+        numeric_output_cols = [
+            name for name, dtype in df.schema.items()
+            if dtype.is_numeric() and name != "trades_count"
+        ]
+        if numeric_output_cols:
+            df = df.filter(
+                pl.all_horizontal(
+                    [pl.col(name).is_not_null() & pl.col(name).is_finite()
+                     for name in numeric_output_cols]
+                )
+            )
 
         # Log null counts per column before drop_nulls
         null_counts = {col: df[col].null_count() for col in df.columns}

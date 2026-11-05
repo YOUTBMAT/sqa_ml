@@ -16,27 +16,42 @@ class PerformanceMetrics:
         Max drawdown is measured on closed-trade equity, starting from the initial capital.
         """
         logger.info("Calculating performance metrics...")
+        equity_curve = trades.attrs.get("equity_curve")
+        if equity_curve is not None:
+            equity_curve = pd.Series(equity_curve, dtype=float).dropna()
+            candle_returns = equity_curve.pct_change().dropna()
+        else:
+            equity_curve = pd.concat(
+                [pd.Series([initial_capital]), trades["equity"].astype(float)],
+                ignore_index=True,
+            )
+            candle_returns = trades["net_return"].astype(float)
+
         returns = trades["net_return"].astype(float)
         n_trades = len(returns)
         if n_trades == 0:
+            final_equity = float(equity_curve.iloc[-1]) if len(equity_curve) else float(initial_capital)
+            max_drawdown = float(
+                ((equity_curve - equity_curve.cummax()) / equity_curve.cummax()).min()
+            ) if len(equity_curve) else 0.0
             return {
-                "initial_capital": float(initial_capital), "final_equity": float(initial_capital),
-                "total_return_pct": 0.0, "sharpe_ratio": 0.0, "sortino_ratio": 0.0, "max_drawdown_pct": 0.0,
+                "initial_capital": float(initial_capital), "final_equity": final_equity,
+                "total_return_pct": (final_equity / initial_capital - 1.0) * 100.0,
+                "sharpe_ratio": 0.0, "sortino_ratio": 0.0, "max_drawdown_pct": max_drawdown * 100.0,
                 "calmar_ratio": 0.0, "win_rate_pct": 0.0, "profit_factor": 0.0, "total_trades": 0,
                 "total_fees_paid": 0.0,
             }
 
-        equity = pd.concat([pd.Series([initial_capital]), trades["equity"].astype(float)], ignore_index=True)
-        final_equity = float(equity.iloc[-1])
+        final_equity = float(equity_curve.iloc[-1])
         total_return = (final_equity - initial_capital) / initial_capital
 
-        annualizer = np.sqrt(n_trades / span_years) if span_years > 0 else 0.0
-        std = returns.std()
-        sharpe = float(returns.mean() / std * annualizer) if n_trades > 1 and std > 0 else 0.0
-        downside_dev = float(np.sqrt(np.mean(np.minimum(returns, 0.0) ** 2)))
-        sortino = float(returns.mean() / downside_dev * annualizer) if downside_dev > 0 else 0.0
+        annualizer = np.sqrt(len(candle_returns) / span_years) if span_years > 0 else 0.0
+        std = candle_returns.std()
+        sharpe = float(candle_returns.mean() / std * annualizer) if len(candle_returns) > 1 and std > 0 else 0.0
+        downside_dev = float(np.sqrt(np.mean(np.minimum(candle_returns, 0.0) ** 2))) if len(candle_returns) else 0.0
+        sortino = float(candle_returns.mean() / downside_dev * annualizer) if downside_dev > 0 else 0.0
 
-        max_drawdown = float(((equity - equity.cummax()) / equity.cummax()).min())
+        max_drawdown = float(((equity_curve - equity_curve.cummax()) / equity_curve.cummax()).min())
         calmar = total_return / abs(max_drawdown) if max_drawdown < 0 else 0.0
 
         gross_profit = float(returns[returns > 0].sum())

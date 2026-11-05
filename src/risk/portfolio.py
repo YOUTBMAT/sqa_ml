@@ -17,6 +17,7 @@ class PortfolioManager:
         max_open_exposure_pct: float = 0.20,
         target_atr_pct: float = 0.02,
         max_atr_pct: float = 0.10,
+        risk_per_trade_pct: float = 0.01,
     ) -> None:
         limits = (
             max_daily_drawdown_pct,
@@ -24,6 +25,7 @@ class PortfolioManager:
             max_open_exposure_pct,
             target_atr_pct,
             max_atr_pct,
+            risk_per_trade_pct,
         )
         if any(not math.isfinite(value) or value <= 0 for value in limits):
             raise ValueError("Portfolio limits and ATR targets must be finite and positive.")
@@ -35,6 +37,7 @@ class PortfolioManager:
         self.max_open_exposure_pct = max_open_exposure_pct
         self.target_atr_pct = target_atr_pct
         self.max_atr_pct = max_atr_pct
+        self.risk_per_trade_pct = risk_per_trade_pct
 
     def calculate_position_size(
         self,
@@ -46,6 +49,7 @@ class PortfolioManager:
         price: float,
         max_kelly_fraction: float = 0.25,
         active_positions: dict[str, dict] | None = None,
+        stop_distance: float | None = None,
     ) -> float:
         """Return units sized by fractional Kelly, ATR normalization, and remaining exposure.
 
@@ -75,6 +79,14 @@ class PortfolioManager:
         fractional_kelly = (kelly_full * max_kelly_fraction) if kelly_full > 1e-12 else 0.0
         atr_scalar = min(1.0, self.target_atr_pct / atr_pct)
         desired_notional = current_balance * fractional_kelly * atr_scalar
+        if stop_distance is not None:
+            if not math.isfinite(stop_distance) or stop_distance <= 0:
+                raise ValueError("stop_distance must be finite and positive.")
+            risk_cap_amount = current_balance * self.risk_per_trade_pct
+            desired_notional = min(
+                desired_notional,
+                risk_cap_amount * price / stop_distance,
+            )
 
         open_notional = sum(
             float(position.get("amount", 0.0)) * float(position.get("entry_price", price))

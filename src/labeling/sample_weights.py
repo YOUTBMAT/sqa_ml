@@ -1,7 +1,6 @@
 """Sample weights and concurrency uniqueness module (Marcos López de Prado)."""
 
 import pandas as pd
-import numpy as np
 from src.utils.logger import logger
 
 
@@ -59,18 +58,14 @@ class SampleWeights:
     def get_sample_weights(
         cls, barrier_events: pd.DataFrame, uniqueness: pd.Series, target_returns: pd.Series
     ) -> pd.Series:
-        """Compute final sample weights combining uniqueness and absolute event returns."""
-        logger.info("Computing final sample weights...")
-        # Absolute return magnitude as performance weight proxy
-        abs_returns = target_returns.abs()
-        
-        # Raw weights = uniqueness * abs_return
-        raw_weights = uniqueness * abs_returns
+        """Compute raw sample weights without cross-window normalization."""
+        if not barrier_events.index.equals(uniqueness.index):
+            raise ValueError("barrier_events and uniqueness must have identical indexes.")
+        if not barrier_events.index.equals(target_returns.index):
+            raise ValueError("barrier_events and target_returns must have identical indexes.")
 
-        # Normalize weights to sum to number of samples (or mean of 1.0)
-        if not raw_weights.empty and raw_weights.sum() > 0:
-            weights = raw_weights * (len(raw_weights) / raw_weights.sum())
-        else:
-            weights = pd.Series(1.0, index=barrier_events.index)
-
-        return weights.fillna(1.0)
+        logger.info("Computing raw sample weights...")
+        return (
+            uniqueness.astype(float)
+            * target_returns.abs().astype(float)
+        ).replace([float("inf"), float("-inf")], pd.NA).fillna(0.0)

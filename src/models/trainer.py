@@ -9,6 +9,7 @@ from sklearn.base import clone
 from sklearn.metrics import log_loss, accuracy_score, roc_auc_score
 from pathlib import Path
 from config.settings import settings
+from src.labeling.sample_weights import SampleWeights
 from src.utils.logger import logger
 
 
@@ -87,12 +88,36 @@ class QuantModelTrainer:
         logger.info(f"Training LightGBM binary model on {len(df)} samples using {len(feature_cols)} features...")
         self.feature_cols = feature_cols
 
-        pdf = df.select(feature_cols + [target_col, weight_col]).to_pandas()
-        pdf = pdf.dropna(subset=feature_cols + [target_col, weight_col])
+        required_cols = feature_cols + [target_col]
+        optional_weight_cols = [weight_col, "timestamp", "t1", "target_return"]
+        selected_cols = list(dict.fromkeys(required_cols + optional_weight_cols))
+        available_cols = [column for column in selected_cols if column in df.columns]
+        pdf = df.select(available_cols).to_pandas()
+        pdf = pdf.dropna(subset=required_cols)
 
         X = pdf[feature_cols]
         y = pdf[target_col].astype(int)
-        weights = pdf[weight_col].astype(float)
+        if {"timestamp", "t1", "target_return"}.issubset(pdf.columns):
+            timestamps = pd.to_datetime(pdf["timestamp"])
+            events = pd.DataFrame(
+                {"t1": pd.to_datetime(pdf["t1"])},
+                index=timestamps,
+            )
+            close_idx = pd.DatetimeIndex(timestamps)
+            concurrency = SampleWeights.get_num_co_events(close_idx, events)
+            uniqueness = SampleWeights.get_sample_uniqueness(events, concurrency)
+            weights = SampleWeights.get_sample_weights(
+                events,
+                uniqueness,
+                pdf["target_return"].set_axis(timestamps),
+            ).reset_index(drop=True)
+        else:
+            weights = pdf[weight_col].astype(float).fillna(0.0)
+        weight_mean = float(weights.mean())
+        if not np.isfinite(weight_mean) or weight_mean <= 0:
+            weights = pd.Series(1.0, index=pdf.index, dtype=float)
+        else:
+            weights = weights / weight_mean
 
         if len(X) == 0:
             raise ValueError("Training dataset is empty after removing nulls.")

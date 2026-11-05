@@ -62,18 +62,18 @@ class DatasetBuilder:
         pdf["timestamp"] = pd.to_datetime(pdf["timestamp"])
         pdf = pdf.set_index("timestamp").sort_index()
 
-        # Concurrency & Uniqueness on the full hourly timeline, each event living from entry to its actual exit
-        bar_idx = pd.DatetimeIndex(pd.to_datetime(df_features["timestamp"].to_pandas()))
+        # Compute raw weights only. Their normalization is performed by the
+        # trainer after each walk-forward split has selected its train window.
+        event_idx = pd.DatetimeIndex(pd.to_datetime(pdf.index))
         barrier_events = pd.DataFrame({"t1": pd.to_datetime(pdf["t1"])}, index=pdf.index)
-        num_co = SampleWeights.get_num_co_events(bar_idx, barrier_events)
+        num_co = SampleWeights.get_num_co_events(event_idx, barrier_events)
         uniqueness = SampleWeights.get_sample_uniqueness(barrier_events, num_co)
-        sample_weights = SampleWeights.get_sample_weights(barrier_events, uniqueness, pdf["target_return"])
-
-        # Add sample_weight to pdf
-        pdf["sample_weight"] = sample_weights
-
-        # Drop rows where sample_weight is NaN
-        pdf = pdf.dropna(subset=["sample_weight"])
+        pdf["sample_uniqueness"] = uniqueness
+        pdf["sample_weight"] = SampleWeights.get_sample_weights(
+            barrier_events,
+            uniqueness,
+            pdf["target_return"],
+        )
         pdf = pdf.reset_index()
 
         # 4. Convert back to Polars
