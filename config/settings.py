@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -74,20 +74,6 @@ class Settings(BaseSettings):
         "colsample_bytree": 0.8,
         "subsample": 0.8,
     }
-
-    @model_validator(mode="after")
-    def validate_live_exchange_access(self) -> "Settings":
-        if not self.EXCHANGE_SANDBOX:
-            if self.ENVIRONMENT.lower() != "production":
-                raise ValueError(
-                    "ENVIRONMENT=production is required for non-sandbox exchange access."
-                )
-            if not self.EXCHANGE_API_KEY or not self.EXCHANGE_API_SECRET:
-                raise ValueError(
-                    "EXCHANGE_API_KEY and EXCHANGE_API_SECRET are required "
-                    "for non-sandbox exchange access."
-                )
-        return self
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,

@@ -12,11 +12,15 @@ class FeatureStorage:
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_filepath(self, symbol: str, timeframe: str) -> Path:
+    def get_filepath(self, symbol: str, timeframe: str) -> Path:
         """Sanitize symbol and return parquet file path."""
         sanitized_symbol = symbol.replace("/", "_").replace("-", "_").lower()
         filename = f"{sanitized_symbol}_{timeframe}.parquet"
         return self.base_dir / filename
+
+    def _get_filepath(self, symbol: str, timeframe: str) -> Path:
+        """Backward-compatible internal alias for the public path accessor."""
+        return self.get_filepath(symbol, timeframe)
 
     def save_features(self, df: pl.DataFrame, symbol: str, timeframe: str) -> Path:
         """Save feature Polars DataFrame to Apache Parquet with snappy compression."""

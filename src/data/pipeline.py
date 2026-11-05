@@ -64,7 +64,7 @@ class ETLPipeline:
             metrics_df = await self.collector.fetch_market_metrics(symbol)
             if not metrics_df.is_empty():
                 DataStorage.bulk_upsert_metrics(metrics_df)
-        except Exception as e:
+        except (ConnectionError, TimeoutError, OSError, ValueError) as e:
             logger.warning(f"Failed to process market metrics for {symbol}: {e}")
 
         logger.success(f"ETL pipeline completed successfully for {symbol}. Processed {inserted_candles} records.")

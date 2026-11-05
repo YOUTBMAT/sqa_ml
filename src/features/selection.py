@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.base import clone
 from sklearn.metrics import roc_auc_score
+from src.labeling.sample_weights import SampleWeights
 
 
 class PurgedFeatureSelector:
@@ -18,6 +19,7 @@ class PurgedFeatureSelector:
         y: pd.Series | np.ndarray,
         cv_splits: Iterable[tuple[np.ndarray, np.ndarray]],
         sample_weight: pd.Series | np.ndarray | None = None,
+        event_metadata: pd.DataFrame | None = None,
         random_state: int = 42,
     ) -> pd.DataFrame:
         """Return mean and standard deviation of per-fold permutation MDA scores.
@@ -36,6 +38,12 @@ class PurgedFeatureSelector:
         weights = None if sample_weight is None else np.asarray(sample_weight).reshape(-1)
         if weights is not None and len(weights) != len(X):
             raise ValueError("sample_weight must have the same number of rows as X.")
+        if event_metadata is not None:
+            required = {"timestamp", "t1", "target_return"}
+            if not required.issubset(event_metadata.columns):
+                raise ValueError(f"event_metadata must contain {sorted(required)}.")
+            if len(event_metadata) != len(X):
+                raise ValueError("event_metadata must have the same number of rows as X.")
 
         scores: dict[str, list[float]] = {feature: [] for feature in X.columns}
         rng = np.random.default_rng(random_state)
@@ -52,7 +60,29 @@ class PurgedFeatureSelector:
 
             fold_model = clone(model)
             fit_kwargs = {}
-            if weights is not None:
+            if event_metadata is not None:
+                train_events = event_metadata.iloc[train_idx].copy()
+                train_events["timestamp"] = pd.to_datetime(train_events["timestamp"], utc=True)
+                train_events["t1"] = pd.to_datetime(train_events["t1"], utc=True)
+                train_events = train_events.set_index("timestamp").sort_index()
+                concurrency = SampleWeights.get_num_co_events(
+                    pd.DatetimeIndex(train_events.index), train_events[["t1"]]
+                )
+                uniqueness = SampleWeights.get_sample_uniqueness(
+                    train_events[["t1"]], concurrency
+                )
+                fold_weights = SampleWeights.get_sample_weights(
+                    train_events[["t1"]],
+                    uniqueness,
+                    train_events["target_return"],
+                )
+                mean_weight = float(fold_weights.mean())
+                if np.isfinite(mean_weight) and mean_weight > 0:
+                    fold_weights = fold_weights / mean_weight
+                else:
+                    fold_weights = pd.Series(1.0, index=fold_weights.index)
+                fit_kwargs["sample_weight"] = fold_weights.to_numpy()
+            elif weights is not None:
                 fit_kwargs["sample_weight"] = weights[train_idx]
             fold_model.fit(X.iloc[train_idx], y_train, **fit_kwargs)
 

@@ -214,8 +214,11 @@ class BotRunner:
             calibrated_win_rate = float(
                 meta.get("calibrated_win_rate", settings.CALIBRATED_WIN_RATE)
             )
-        except Exception:
-            logger.warning(f"No trained model found for {symbol} ({self.timeframe}). Skipping prediction.")
+        except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
+            logger.warning(
+                f"Unable to load trained model for {symbol} ({self.timeframe}); "
+                f"skipping prediction: {exc}"
+            )
             return
 
         # Primary Signal (EMA200 & ADX14)

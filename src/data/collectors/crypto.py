@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import ccxt.async_support as ccxt_async
 import polars as pl
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 
 from config.settings import settings
 from src.data.collectors.base import BaseCollector
@@ -46,13 +46,14 @@ class CryptoCollector(BaseCollector):
             raise RuntimeError(
                 "Live exchange access requires ENVIRONMENT=production."
             )
+        elif not settings.EXCHANGE_API_KEY or not settings.EXCHANGE_API_SECRET:
+            raise RuntimeError(
+                "EXCHANGE_API_KEY and EXCHANGE_API_SECRET are required for live access."
+            )
 
     async def __aenter__(self) -> "CryptoCollector":
         if not self.exchange.markets:
-            try:
-                await self.exchange.load_markets()
-            except Exception as e:
-                logger.warning(f"Failed to load markets on enter: {e}")
+            await self.exchange.load_markets()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -65,8 +66,16 @@ class CryptoCollector(BaseCollector):
 
     @retry(
         stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=2, max=60),
-        retry=retry_if_exception_type((ccxt_async.NetworkError, ccxt_async.ExchangeNotAvailable, ccxt_async.RateLimitExceeded)),
+        wait=wait_random_exponential(multiplier=1, max=60),
+        retry=retry_if_exception_type(
+            (
+                ccxt_async.NetworkError,
+                ccxt_async.ExchangeNotAvailable,
+                ccxt_async.RateLimitExceeded,
+                ccxt_async.DDoSProtection,
+                ccxt_async.RequestTimeout,
+            )
+        ),
         reraise=True,
     )
     async def _fetch_ohlcv_page(self, symbol: str, timeframe: str, since: int) -> list:

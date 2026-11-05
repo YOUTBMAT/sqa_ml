@@ -1,5 +1,6 @@
 """Asynchronous Telegram notification module for trading alerts and summaries."""
 
+import asyncio
 import httpx
 from config.settings import settings
 from src.utils.logger import logger
@@ -28,18 +29,34 @@ class TelegramNotifier:
             "parse_mode": "HTML",
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, json=payload)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for attempt in range(3):
+                try:
+                    response = await client.post(url, json=payload)
+                except httpx.RequestError as exc:
+                    if attempt == 2:
+                        logger.error(f"Telegram request failed after retries: {exc}")
+                        return False
+                    await asyncio.sleep(2**attempt)
+                    continue
                 if response.status_code == 200:
                     logger.success("Telegram notification sent successfully.")
                     return True
-                else:
-                    logger.error(f"Failed to send Telegram notification: {response.text}")
-                    return False
-        except Exception as e:
-            logger.error(f"Exception occurred while sending Telegram notification: {e}")
-            return False
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After", "1")
+                    try:
+                        delay = min(60.0, max(1.0, float(retry_after)))
+                    except ValueError:
+                        delay = 1.0
+                    if attempt < 2:
+                        await asyncio.sleep(delay)
+                        continue
+                logger.error(
+                    f"Failed to send Telegram notification "
+                    f"(status={response.status_code}): {response.text}"
+                )
+                return False
+        return False
 
     async def notify_order_execution(
         self, symbol: str, side: str, amount: float, price: float, mode: str, sl: float, tp: float

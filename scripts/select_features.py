@@ -76,6 +76,7 @@ def main() -> None:
         y,
         splits,
         sample_weight=pdf["sample_weight"].astype(float),
+        event_metadata=pdf[["timestamp", "t1", "target_return"]],
         random_state=args.seed,
     )
 

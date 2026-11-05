@@ -198,8 +198,7 @@ class VectorizedBacktester:
             )
             equity_curve.iloc[entry_idx : exit_idx + 1] = marked
             equity_curve.iloc[exit_idx] = trade[13]
-            if exit_idx + 1 < len(equity_curve):
-                equity_curve.iloc[exit_idx + 1 :] = trade[13]
+        equity_curve = equity_curve.ffill().fillna(self.initial_capital)
         trade_df.attrs["equity_curve"] = equity_curve
 
         durations = [(t[1] - t[0]).total_seconds() / 3600 for t in trades]

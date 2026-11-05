@@ -1,10 +1,14 @@
 """CLI script for generating and persisting advanced quantitative features from database OHLCV data."""
 
 import argparse
+import os
 import sys
 import time
 from datetime import datetime, timezone, timedelta
+from collections.abc import Iterator
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 from sqlalchemy import text
 
 from src.data.database import init_db, get_db_session
@@ -18,9 +22,11 @@ def fetch_candles_from_db(
     timeframe: str,
     limit_days: int | None = None,
     chunk_size: int = 10_000,
-):
+) -> Iterator[pl.DataFrame]:
     """Fetch OHLCV candles from TimescaleDB for a given symbol and timeframe."""
     logger.info(f"Fetching candles for {symbol} ({timeframe}) from database...")
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive.")
     
     query_str = """
         SELECT timestamp, symbol, asset_class, timeframe, open, high, low, close, volume, trades_count
@@ -105,34 +111,48 @@ def main() -> None:
     for symbol in args.symbols:
         logger.info(f"Processing features for symbol: {symbol} ({args.timeframe})")
         chunks = fetch_candles_from_db(symbol, args.timeframe, limit_days=args.limit_days)
-        processed_chunks = []
         history = pl.DataFrame()
         last_timestamp = None
-        for df_candles in chunks:
-            if df_candles.is_empty():
+        writer = None
+        final_path = storage.get_filepath(symbol, args.timeframe)
+        temporary_path = final_path.with_suffix(".parquet.tmp")
+        total_symbol_rows = 0
+        committed = False
+        try:
+            for df_candles in chunks:
+                if df_candles.is_empty():
+                    continue
+                combined = (
+                    pl.concat([history, df_candles], how="vertical_relaxed")
+                    if not history.is_empty()
+                    else df_candles
+                )
+                processed = pipeline.run(combined)
+                if last_timestamp is not None:
+                    processed = processed.filter(pl.col("timestamp") > last_timestamp)
+                if not processed.is_empty():
+                    table = pa.Table.from_pandas(processed.to_pandas(), preserve_index=False)
+                    if writer is None:
+                        writer = pq.ParquetWriter(temporary_path, table.schema, compression="snappy")
+                    writer.write_table(table)
+                    total_symbol_rows += len(processed)
+                    last_timestamp = processed["timestamp"].max()
+                history = combined.tail(2_000)
+
+            if writer is None:
+                logger.warning(f"Skipping {symbol}: No candle data available.")
                 continue
-            combined = (
-                pl.concat([history, df_candles], how="vertical_relaxed")
-                if not history.is_empty()
-                else df_candles
-            )
-            processed = pipeline.run(combined)
-            if last_timestamp is not None:
-                processed = processed.filter(pl.col("timestamp") > last_timestamp)
-            if not processed.is_empty():
-                processed_chunks.append(processed)
-                last_timestamp = processed["timestamp"].max()
-            history = combined.tail(250)
 
-        if not processed_chunks:
-            logger.warning(f"Skipping {symbol}: No candle data available.")
-            continue
-
-        df_features = pl.concat(processed_chunks, how="vertical_relaxed")
-
-        # Save to Parquet
-        storage.save_features(df_features, symbol, args.timeframe)
-        total_processed += len(df_features)
+            writer.close()
+            writer = None
+            os.replace(temporary_path, final_path)
+            committed = True
+            total_processed += total_symbol_rows
+        finally:
+            if writer is not None:
+                writer.close()
+            if not committed:
+                temporary_path.unlink(missing_ok=True)
 
     elapsed = time.time() - start_wall_time
     logger.success(

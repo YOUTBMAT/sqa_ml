@@ -37,11 +37,24 @@ class PurgedGroupTimeSeriesSplit:
         elif event_times is not None:
             if isinstance(event_times, pl.DataFrame):
                 event_times = event_times.to_pandas()
-            t0 = pd.to_datetime(event_times["timestamp"] if "timestamp" in event_times else X.index)
-            t1 = pd.to_datetime(event_times["t1"])
+            if isinstance(event_times, pd.Series):
+                t0 = pd.to_datetime(X["timestamp"] if "timestamp" in X.columns else X.index)
+                t1 = pd.to_datetime(event_times)
+            else:
+                t0 = pd.to_datetime(
+                    event_times["timestamp"] if "timestamp" in event_times else X.index
+                )
+                t1 = pd.to_datetime(event_times["t1"])
         else:
             t0 = pd.to_datetime(X["timestamp"] if "timestamp" in X.columns else X.index)
             t1 = t0
+
+        if t0.isna().any() or t1.isna().any():
+            raise ValueError("Cross-validation timestamps cannot contain NaT.")
+        if not t0.is_monotonic_increasing:
+            raise ValueError("Cross-validation input must be sorted by timestamp.")
+        if t0.duplicated().any():
+            raise ValueError("Cross-validation timestamps must be unique.")
 
         indices = np.arange(len(X))
         test_folds = np.array_split(indices, self.n_splits)
@@ -70,9 +83,8 @@ class PurgedGroupTimeSeriesSplit:
             # the validation period, even though the walk-forward train set only
             # contains observations before the test window.
             if self.pct_embargo > 0 and len(train_idx) > 0:
-                history_start = t0.iloc[0]
-                history_end = t0.iloc[-1]
-                embargo_delta = (history_end - history_start) * self.pct_embargo
+                test_end = t0.iloc[test_idx[-1]]
+                embargo_delta = (test_end - test_start) * self.pct_embargo
                 embargo_start = test_start - embargo_delta
                 train_idx = train_idx[t0.iloc[train_idx].to_numpy() < embargo_start]
 

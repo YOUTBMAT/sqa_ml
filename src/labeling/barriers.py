@@ -89,6 +89,13 @@ def simulate_trade(
         raise ValueError("max_holding_hours must be positive.")
     if isinstance(max_holding_hours, bool) or not isinstance(max_holding_hours, int):
         raise ValueError("max_holding_hours must be a positive integer.")
+    arrays = (open_, high, low, close)
+    if any(len(values) != len(close) for values in arrays):
+        raise ValueError("All price arrays must have the same length.")
+    if side not in (-1, 1):
+        raise ValueError("side must be either 1 or -1.")
+    if not np.isfinite(atr_value) or atr_value <= 0:
+        raise ValueError("atr_value must be finite and positive.")
 
     if timestamps is None:
         # Backwards-compatible test/helper path; production callers must pass
@@ -100,6 +107,8 @@ def simulate_trade(
         timestamp_values = pd.DatetimeIndex(pd.to_datetime(np.asarray(timestamps)))
     if len(timestamp_values) != len(close):
         raise ValueError("timestamps must have the same length as the price arrays.")
+    if timestamp_values.isna().any() or timestamp_values.has_duplicates:
+        raise ValueError("timestamps must be unique and cannot contain NaT.")
     if entry_idx < 0 or entry_idx >= len(close):
         raise IndexError("entry_idx is outside the price arrays.")
     if not timestamp_values.is_monotonic_increasing:
