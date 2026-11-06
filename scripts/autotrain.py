@@ -54,7 +54,7 @@ def acquire_run_lock(run_id: str) -> int | None:
 async def download_and_build_features(symbol: str, timeframe: str, days: int, exchange_id: str) -> int:
     """Fetch recent exchange candles and persist their engineered feature matrix."""
     now = datetime.now(timezone.utc)
-    async with CryptoCollector(exchange_id=exchange_id) as collector:
+    async with CryptoCollector(exchange_id=exchange_id, public_only=True) as collector:
         candles = await collector.fetch_ohlcv_historical(
             symbol, timeframe, now - timedelta(days=days), now
         )

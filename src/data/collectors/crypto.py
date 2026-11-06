@@ -18,13 +18,17 @@ class CryptoCollector(BaseCollector):
         exchange_id: str | None = None,
         sandbox: bool | None = None,
         default_type: str = "spot",
+        public_only: bool = False,
     ) -> None:
         exchange_id = exchange_id or settings.DEFAULT_EXCHANGE
         sandbox = settings.EXCHANGE_SANDBOX if sandbox is None else sandbox
         if not isinstance(sandbox, bool):
             raise ValueError("sandbox must be a boolean.")
+        if not isinstance(public_only, bool):
+            raise ValueError("public_only must be a boolean.")
         self.exchange_id = exchange_id
-        self.sandbox = sandbox
+        self.public_only = public_only
+        self.sandbox = False if public_only else sandbox
         exchange_class = getattr(ccxt_async, exchange_id)
         self.exchange = exchange_class(
             {
@@ -36,7 +40,12 @@ class CryptoCollector(BaseCollector):
                 "options": {"defaultType": default_type},
             }
         )
-        if sandbox:
+        if public_only:
+            logger.info(
+                f"[{exchange_id.upper()}] Public market-data mode enabled; "
+                "private trading endpoints are not configured."
+            )
+        elif sandbox:
             if not self.exchange.has.get("sandboxMode"):
                 raise RuntimeError(
                     f"Exchange {exchange_id!r} does not support sandbox mode."
